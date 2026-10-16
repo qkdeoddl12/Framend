@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+pub mod exfat;
 mod export;
 mod formats;
+pub mod native_video;
 mod scan;
 mod source;
 pub use export::recover;

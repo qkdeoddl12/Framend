@@ -18,7 +18,7 @@ struct ContentView: View {
             }
             .background(.background)
         }
-        .navigationTitle("Recovery Card")
+        .navigationTitle("Framend")
         .toolbar {
             ToolbarItemGroup {
                 Button("이미지 열기", systemImage: "folder") { model.chooseImage() }
@@ -42,7 +42,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Image(systemName: "sdcard.fill").font(.largeTitle).foregroundStyle(.tint)
                     .accessibilityHidden(true)
-                Text("Recovery Card").font(.title2.bold())
+                Text("Framend").font(.title2.bold())
                 Text("잃어버린 순간을, 다시.").font(.subheadline).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 22) {
@@ -105,7 +105,7 @@ struct ContentView: View {
                 }.buttonStyle(.borderedProminent).controlSize(.large)
             }
             Spacer()
-            Text("이 버전은 연속 저장된 파일을 찾습니다. 단편화된 파일과 영상은 후속 지원합니다.")
+            Text("사진은 연속 저장된 파일을 찾습니다. 영상 탭에서 exFAT·H.264·HEVC 실험 기능을 사용할 수 있습니다.")
                 .font(.caption).foregroundStyle(.secondary).padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity)

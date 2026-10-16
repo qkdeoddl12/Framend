@@ -118,6 +118,15 @@ if CommandLine.arguments.contains("--integration") {
     }
 }
 
+if CommandLine.arguments.contains("--video-process") {
+    do { try await runVideoProcessChecks() }
+    catch { print("FAIL Video process: \(error)"); exit(1) }
+}
+if CommandLine.arguments.contains("--video") {
+    do { try await runVideoChecks() }
+    catch { print("FAIL Video checks: \(error)"); exit(1) }
+}
+
 if CommandLine.arguments.contains("--broken-pipe") {
     do {
         try await EngineClient.run(executable: URL(fileURLWithPath: "/usr/bin/false"), arguments: [], input: Data(repeating: 0, count: 5*1024*1024)) { _ in }
@@ -137,4 +146,14 @@ if CommandLine.arguments.contains("--bad-json") {
         }
         print("PASS Malformed protocol terminates child promptly")
     }
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--video-fixture"), index + 1 < CommandLine.arguments.count {
+    do { try await runVideoIntegration(URL(filePath: CommandLine.arguments[index + 1])) }
+    catch { print("FAIL video integration: \(error)"); exit(1) }
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--video-exfat-fixture"), index + 2 < CommandLine.arguments.count {
+    do { try await runRealExfatIntegration(image: URL(filePath: CommandLine.arguments[index + 1]), destination: URL(filePath: CommandLine.arguments[index + 2])) }
+    catch { print("FAIL real exFAT integration: \(error)"); exit(1) }
 }

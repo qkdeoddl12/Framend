@@ -10,3 +10,16 @@ fixtures/generated/
 *.raw
 *.raf
 *.RAF
+
+__pycache__/
+*.pyc
+# Keep private media and generated recovery evidence outside git.
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.es
+*.hevc
+*.h264
+*.framehash
+*.framemd5

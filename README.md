@@ -1,13 +1,13 @@
-# Recovery Card
+# Framend · 프레임엔드
 
-macOS용 로컬 사진 복구 앱의 첫 프리뷰. **평면 SD카드 이미지 파일에서 연속 저장된 JPEG·RAF를 찾아 추출합니다.**
+**Frame + Mend.** macOS에서 사진·영상의 남은 데이터를 찾고 복구 근거를 기록하는 로컬 앱입니다. Rust 자체 엔진으로 JPEG·RAF 추출, exFAT 영상 조각 복원, H.264·HEVC 프레임 부분 복구를 제공합니다. 현재는 실험용 프리뷰입니다.
 
 ## 실행
 
-이미 빌드된 앱: `dist/Recovery Card.app`
+이미 빌드된 앱: `dist/Framend.app`
 
 ```sh
-open 'dist/Recovery Card.app'
+open 'dist/Framend.app'
 ```
 
 1. SSD에 보관한 디스크 이미지(`.img`, `.dd`, `.raw`)를 선택합니다.
@@ -28,9 +28,22 @@ exFAT 저장장치에서는 새 파일 생성 후 복사하는 방식으로 덮�
 - RAF는 유효한 내장 JPEG와 겹치지 않는 헤더 범위를 확인한 뒤 추출합니다. 내장 JPEG가 손상된 RAF는 아직 지원하지 않습니다. **RAW 전체 디코딩 미검증**이며 내장 JPEG 미리보기와 구별합니다.
 - JPEG 디코딩 성공은 ImageIO가 픽셀을 읽었다는 뜻입니다. 원본과 동일함이나 손상 없음의 보증이 아닙니다.
 - 삭제 여부·원래 이름·폴더는 알 수 없습니다. 존재하는 사진도 후보로 발견됩니다.
-- `.dmg` 압축 컨테이너, 물리 SD카드 복제, exFAT/FAT32 메타데이터 복구, 단편화 재조립, HEIF·영상 복구는 아직 지원하지 않습니다.
-- 합성 RAF로 구조 검사를 검증했습니다. **실제 X-T5 카드 복구율·압축 RAW 호환성은 아직 검증하지 않았습니다.**
+- `.dmg` 압축 컨테이너, 앱 안에서의 물리 SD카드 복제, FAT32/GPT, 메타데이터가 사라진 임의 조각 재배열, HEIF·일반 문서 복구는 아직 지원하지 않습니다. exFAT·영상 지원 범위는 아래와 같습니다.
+- 실제 X-T5 카드에서 사진 후보 검출과 별도 RAW 검증을 수행했습니다. 이 앱의 RAF 검증은 여전히 구조 검사이며, 전체 카드에 대한 복구율이나 모든 압축 RAW 모드 호환성은 확정하지 않았습니다.
 - macOS 14+를 대상으로 Apple Silicon Mac에서 빌드·검증합니다. 로컬 ad hoc 서명이며 공증한 배포본이 아닙니다.
+
+## 영상 복구 (0.2 실험 기능)
+
+영상 기능에는 `ffmpeg`와 `ffprobe`가 필요합니다 (`brew install ffmpeg`). 영상 수리 알고리즘은 자체 Rust 코드이고, FFmpeg는 컨테이너 저장과 독립 디코딩 검사에 사용합니다.
+
+- **카드 이미지에서 영상 찾기:** exFAT 파일 목록·FAT 체인·할당 비트맵을 검사해 MOV/MP4 후보를 표시합니다. 선택한 후보의 원래 바이트 순서를 복원하고 모든 영상·음성 트랙을 끝까지 디코딩합니다. 저장 폴더는 외장 SSD를 선택하세요.
+- **손상 영상 수리:** 손상 MOV/MP4와 같은 카메라·코덱·해상도·프레임 속도의 정상 참고 영상을 선택합니다. H.264/HEVC NAL 구조와 IDR 시작점을 검사해 남은 영상 프레임을 추출합니다. **영상 트랙만 부분 복구**하며 음성과 원래 타임스탬프는 복원하지 않습니다. 재생 속도는 참고 영상의 평균값입니다.
+- 결과는 매번 새 `Framend-*` 폴더에 저장됩니다. `results.json`, 원본 위치/해시 보고서, 도구 정보, 트랙별 프레임 해시와 오류 로그를 보존합니다. 중단·실패·디코딩 오류가 있으면 `INCOMPLETE.txt`를 유지합니다.
+- `전체 디코딩 통과`는 디코더가 트랙을 읽었다는 의미입니다. 원본의 완전성·장면 순서·조각의 동일 출처까지 증명하지 않습니다. NAL 수리는 디코딩을 통과해도 항상 부분 복구로 표시합니다.
+
+exFAT는 단일 FAT의 1.00 볼륨/MBR만 지원합니다. 삭제된 폴더, 사라진 FAT 체인, 미초기화된 파일 끝은 추정하지 않습니다. NAL 수리는 지원되는 progressive H.264 / single-layer HEVC에 한정되며 IDR에서만 시작·재시작합니다. 손상·알 수 없는 바이트 뒤의 종속 프레임은 건너뜁니다. 메타데이터와 프레임 경계가 모두 사라진 일반적인 단편화 복구는 후속 연구 범위입니다.
+
+[재현 가능한 검증 결과](docs/native-video-validation.md) · [논문 근거와 AI 도입 실험안](docs/research/native-video-and-ai.md). AI 모델은 아직 탑재하지 않았습니다.
 
 ## 개발·검증
 
@@ -42,7 +55,7 @@ cargo test --manifest-path engine/Cargo.toml
 cargo clippy --manifest-path engine/Cargo.toml --all-targets -- -D warnings
 swift scripts/make-demo.swift
 bash scripts/build-app.sh
-swift run RecoveryChecks --integration --broken-pipe --bad-json
+swift run RecoveryChecks --integration --broken-pipe --bad-json --video --video-process
 python3 scripts/smoke-test.py
 ```
 
