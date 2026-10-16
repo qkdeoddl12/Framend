@@ -4,6 +4,9 @@ struct VideoTools: Sendable {
     let engine: URL
     let ffmpeg: URL
     let ffprobe: URL
+    init(engine: URL, ffmpeg: URL, ffprobe: URL) {
+        self.engine = engine; self.ffmpeg = ffmpeg; self.ffprobe = ffprobe
+    }
     init() throws {
         engine = try EngineClient.locateEngine()
         func locate(_ name: String) throws -> URL {
@@ -17,7 +20,7 @@ struct VideoTools: Sendable {
     }
     func evidence() async throws -> [String: String] {
         let result = try await ToolProcess.run(executable: ffmpeg, arguments: ["-version"], timeout: 10, outputLimit: 128 * 1024)
-        return ["engine_sha256": try VideoInput(engine).sha256(), "ffmpeg_sha256": try VideoInput(ffmpeg.resolvingSymlinksInPath()).sha256(), "ffmpeg_version": String(decoding: result.stdout, as: UTF8.self), "app": "Framend native video preview 0.2"]
+        return ["engine_sha256": try VideoInput(engine).sha256(), "ffmpeg_sha256": try VideoInput(ffmpeg.resolvingSymlinksInPath()).sha256(), "ffmpeg_version": String(decoding: result.stdout, as: UTF8.self), "app": "Framend native video preview 0.3"]
     }
 }
 
@@ -45,9 +48,9 @@ struct VideoValidator {
         try session.write(probe.stderr, named: "\(prefix)-probe.log")
         guard probe.status == 0 else { return VideoValidation(status: "failed", tracks: [], diagnostics: String(decoding: probe.stderr, as: UTF8.self)) }
         let streams = try JSONDecoder().decode(Probe.self, from: probe.stdout).streams
-        guard streams.count <= 16 else { throw VideoError.failed("검사할 트랙이 너무 많습니다.") }
+        guard streams.count <= 16 else { return VideoValidation(status: "failed", tracks: [], diagnostics: "검사할 트랙이 너무 많습니다.") }
         let media = streams.filter { $0.codec_type == "video" || $0.codec_type == "audio" }
-        guard media.contains(where: { $0.codec_type == "video" }) else { throw VideoError.failed("검사 가능한 영상 트랙이 없습니다.") }
+        guard media.contains(where: { $0.codec_type == "video" }) else { return VideoValidation(status: "failed", tracks: [], diagnostics: "검사 가능한 영상 트랙이 없습니다.") }
         var tracks: [VideoTrackValidation] = []
         var diagnostics = ""; var failed = false
         for stream in media {
@@ -55,12 +58,12 @@ struct VideoValidator {
             if stream.codec_type == "video" {
                 guard let width = stream.width, let height = stream.height, width > 0, height > 0,
                       width <= 16384, height <= 16384, width * height <= 80_000_000 else {
-                    throw VideoError.failed("영상 크기가 검증 한도를 벗어났습니다.")
+                    return VideoValidation(status: "failed", tracks: tracks, diagnostics: diagnostics + "영상 크기가 검증 한도를 벗어났습니다.")
                 }
             } else {
                 guard let channels = stream.channels, channels > 0, channels <= 64,
                       let rate = Int(stream.sample_rate ?? ""), rate > 0, rate <= 384000 else {
-                    throw VideoError.failed("음성 트랙 설정을 확인할 수 없습니다.")
+                    return VideoValidation(status: "failed", tracks: tracks, diagnostics: diagnostics + "음성 트랙 설정을 확인할 수 없습니다.")
                 }
             }
             await receive(VideoUpdate("\(prefix): \(stream.codec_type ?? "") 트랙 \(stream.index) 전체 디코딩"))
@@ -70,13 +73,20 @@ struct VideoValidator {
                     ["-i", file.path, "-map", "0:\(stream.index)", "-threads", "2", "-fps_mode", "passthrough", "-f", "framehash", "-hash", "sha256", "-n", hashes.path],
                 timeout: 3600, outputLimit: 512 * 1024)
             try session.write(result.stderr, named: "\(prefix)-track-\(stream.index).log")
+            // A decoder can reject a damaged stream before creating its hash file.
+            // Preserve that per-file failure without hiding our own output I/O errors.
+            guard result.status == 0 else {
+                failed = true
+                diagnostics += "track \(stream.index): exit \(result.status)\n" + String(decoding: result.stderr, as: UTF8.self)
+                continue
+            }
             let measured = try FrameHashes.read(hashes)
             let sampleRate = Double(stream.sample_rate ?? "") ?? 0
             let samples = stream.codec_type == "audio" ? Int64((measured.duration * sampleRate).rounded()) : 0
             tracks.append(VideoTrackValidation(index: stream.index, type: stream.codec_type ?? "unknown", codec: stream.codec_name ?? "unknown",
                 decodedFrames: measured.count, decodedSamples: samples, declaredDuration: stream.duration,
                 decodedStart: measured.start, decodedEnd: measured.end))
-            if result.status != 0 || measured.count == 0 || !result.stderr.isEmpty {
+            if measured.count == 0 || !result.stderr.isEmpty {
                 failed = true
                 diagnostics += "track \(stream.index): exit \(result.status), frames \(measured.count)\n" + String(decoding: result.stderr, as: UTF8.self)
             }

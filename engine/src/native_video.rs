@@ -19,12 +19,82 @@ const MAX_MOOV: u64 = 16 * 1024 * 1024;
 const MAX_NAL: u64 = 64 * 1024 * 1024;
 const MAX_EXTENTS: usize = 1_000_000;
 const MAX_BOXES: usize = 100_000;
+const MAX_SEGMENTS: usize = 256;
 
 #[derive(Debug, Serialize)]
 pub struct RetainedExtent {
     /// Original length prefix and NAL payload; output substitutes an Annex B prefix.
     pub offset: u64,
     pub length: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SalvageSegment {
+    pub id: usize,
+    pub output_offset: u64,
+    pub output_length: u64,
+    pub frames: u64,
+    pub extent_start: usize,
+    pub extent_count: usize,
+    pub sha256: String,
+    pub end_reason: String,
+}
+
+struct SegmentWriter {
+    file: File,
+    offset: u64,
+    current: Option<(SalvageSegment, Sha256)>,
+    completed: Vec<SalvageSegment>,
+}
+impl SegmentWriter {
+    fn start(&mut self, extent_start: usize) -> io::Result<()> {
+        if self.completed.len() >= MAX_SEGMENTS {
+            return Err(invalid(
+                "Video segment limit exceeded; scan remains incomplete.",
+            ));
+        }
+        self.current = Some((
+            SalvageSegment {
+                id: self.completed.len() + 1,
+                output_offset: self.offset,
+                output_length: 0,
+                frames: 0,
+                extent_start,
+                extent_count: 0,
+                sha256: String::new(),
+                end_reason: String::new(),
+            },
+            Sha256::new(),
+        ));
+        Ok(())
+    }
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let (_, hash) = self
+            .current
+            .as_mut()
+            .ok_or_else(|| invalid("No active video segment."))?;
+        self.file.write_all(bytes)?;
+        hash.update(bytes);
+        self.offset = self
+            .offset
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| invalid("Elementary stream size overflow."))?;
+        Ok(())
+    }
+    fn picture(&mut self) {
+        if let Some((segment, _)) = &mut self.current {
+            segment.frames += 1;
+        }
+    }
+    fn finish(&mut self, extent_end: usize, reason: &str) {
+        if let Some((mut segment, hash)) = self.current.take() {
+            segment.output_length = self.offset - segment.output_offset;
+            segment.extent_count = extent_end - segment.extent_start;
+            segment.sha256 = format!("{:x}", hash.finalize());
+            segment.end_reason = reason.into();
+            self.completed.push(segment);
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +114,8 @@ pub struct SalvageReport {
     pub frame_count_basis: String,
     pub timing_basis: String,
     pub segments: u64,
+    /// Independent runs, in physical scan order; never evidence of recording chronology.
+    pub segment_map: Vec<SalvageSegment>,
 }
 
 /// Write an exclusive new elementary stream using only retained input NAL payloads
@@ -74,7 +146,12 @@ pub fn salvage(
     input.unchanged()?;
     reference.unchanged()?;
     let (ranges, raw_scan) = media_ranges(&input)?;
-    let mut writer = create_output(output)?;
+    let mut writer = SegmentWriter {
+        file: create_output(output)?,
+        offset: 0,
+        current: None,
+        completed: Vec::new(),
+    };
     let mut reader = Window::new(&input);
     let mut copy = vec![0; WINDOW];
     let mut extents: Vec<RetainedExtent> = Vec::new();
@@ -110,18 +187,21 @@ pub fn salvage(
             let Some(nal) = candidate else {
                 if active {
                     discarded_gaps += 1;
+                    writer.finish(extents.len(), "unknown_bytes");
                 }
                 active = false;
                 picture = None;
                 pos += 1;
                 continue;
             };
-            if !active {
+            let new_segment = !active;
+            if new_segment {
                 if !nal.safe_start() || !viable_chain(&mut reader, pos, end, &config)? {
                     // Do not leap over unconfirmed bytes: a real prefix may occur inside.
                     pos += 1;
                     continue;
                 }
+                writer.start(extents.len())?;
                 for param in &config.parameters {
                     writer.write_all(&[0, 0, 0, 1])?;
                     writer.write_all(param)?;
@@ -132,17 +212,20 @@ pub fn salvage(
             if let Some(slice) = &nal.slice {
                 if slice.first {
                     if picture.as_ref() == Some(&slice.identity) && config.codec == Codec::Avc {
+                        writer.finish(extents.len(), "picture_mismatch");
                         active = false;
                         picture = None;
                         pos += 1;
                         continue;
                     }
                     frames += 1;
+                    writer.picture();
                     picture = Some(slice.identity);
                 } else if picture
                     .as_ref()
                     .is_none_or(|id| !slice.same_picture(id, config.codec))
                 {
+                    writer.finish(extents.len(), "picture_mismatch");
                     active = false;
                     picture = None;
                     pos += 1;
@@ -167,7 +250,10 @@ pub fn salvage(
                 remaining -= amount as u64;
             }
             let length = nal.length + config.length_size as u64;
-            if let Some(last) = extents.last_mut().filter(|e| e.offset + e.length == pos) {
+            if let Some(last) = extents
+                .last_mut()
+                .filter(|e| !new_segment && e.offset + e.length == pos)
+            {
                 last.length += length;
             } else {
                 extents.push(RetainedExtent {
@@ -178,13 +264,14 @@ pub fn salvage(
             retained += length;
             pos += length;
         }
+        writer.finish(extents.len(), "range_end");
     }
     if frames == 0 {
         return Err(invalid(
             "No viable IDR-led video NAL chain found; no frames were recovered.",
         ));
     }
-    writer.sync_all()?;
+    writer.file.sync_all()?;
     input.unchanged()?;
     reference.unchanged()?;
     progress(total, total)?;
@@ -196,6 +283,8 @@ pub fn salvage(
         "Frames count structural picture starts, not decoded pictures; full independent decoding is required. A final picture may lack later slices.".into(),
         "Reference parameter sets do not prove the missing stream used identical settings; semantic reference compatibility is not established.".into(),
         "Unknown byte gaps end a segment; dependent pictures are discarded until another viable IDR. HEVC CRA/BLA pictures cannot start a segment.".into(),
+        "Use segment_map to export independent runs. The aggregate elementary stream does not establish a common source or chronological order across runs.".into(),
+        "Successful decoding cannot establish pixel fidelity: an overwritten or truncated NAL payload can still decode.".into(),
     ];
     if raw_scan {
         warnings
@@ -226,6 +315,7 @@ pub fn salvage(
         frame_count_basis: "structural_access_unit_starts".into(),
         timing_basis: "estimated_reference_average".into(),
         segments,
+        segment_map: writer.completed,
     })
 }
 

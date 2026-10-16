@@ -47,6 +47,22 @@ public final class VideoInput: @unchecked Sendable {
         try unchanged()
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
+    func copyRange(to output: FileHandle, offset: UInt64, length: UInt64) throws -> String {
+        try unchanged()
+        guard length > 0, offset <= size, length <= size - offset else { throw VideoError.failed("영상 구간이 입력 범위를 벗어났습니다.") }
+        var hash = SHA256(); var copied: UInt64 = 0
+        var buffer = [UInt8](repeating: 0, count: 1_048_576)
+        while copied < length {
+            try Task.checkCancellation()
+            let count = pread(handle.fileDescriptor, &buffer, Int(min(UInt64(buffer.count), length - copied)), off_t(offset + copied))
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { throw VideoError.failed("영상 구간을 읽지 못했습니다.") }
+            let chunk = Data(buffer.prefix(count))
+            try output.write(contentsOf: chunk); hash.update(data: chunk); copied += UInt64(count)
+        }
+        try Task.checkCancellation(); try unchanged()
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 public struct VideoSession: Sendable {
@@ -96,11 +112,26 @@ public struct VideoSession: Sendable {
         return directory.appending(path: name)
     }
     func write(_ data: Data, named name: String) throws {
+        let handle = try create(name)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: data); try handle.synchronize()
+    }
+    private func create(_ name: String) throws -> FileHandle {
         _ = try path(name)
         let fd = openat(held.handle.fileDescriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw VideoError.failed("기존 결과를 덮어쓰지 않습니다: \(name)") }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        try handle.write(contentsOf: data); try handle.synchronize(); try handle.close()
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+    public func copySegment(from input: VideoInput, segment: VideoSegment, named name: String) throws -> URL {
+        try Task.checkCancellation(); try input.unchanged()
+        guard segment.output_length > 0, segment.output_offset <= input.size,
+              segment.output_length <= input.size - segment.output_offset else { throw VideoError.failed("영상 구간 범위가 잘못되었습니다.") }
+        let handle = try create(name)
+        defer { try? handle.close() }
+        let hash = try input.copyRange(to: handle, offset: segment.output_offset, length: segment.output_length)
+        guard hash == segment.sha256 else { throw VideoError.failed("영상 구간의 해시가 일치하지 않습니다.") }
+        try handle.synchronize()
+        return try path(name)
     }
     public func writeJSON<T: Encodable>(_ value: T, named name: String) throws {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

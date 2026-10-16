@@ -40,6 +40,18 @@ public struct NativeSalvageReport: Codable, Sendable {
     public let frame_count_basis: String
     public let timing_basis: String
     public let segments: UInt64
+    public let segment_map: [VideoSegment]
+}
+
+public struct VideoSegment: Codable, Sendable {
+    public let id: Int
+    public let output_offset: UInt64
+    public let output_length: UInt64
+    public let frames: UInt64
+    public let extent_start: Int
+    public let extent_count: Int
+    public let sha256: String
+    public let end_reason: String
 }
 
 public struct VideoTrackValidation: Codable, Sendable {

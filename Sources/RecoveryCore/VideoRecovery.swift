@@ -18,8 +18,9 @@ public enum VideoRecovery {
         let tools = try VideoTools(); let session = try VideoSession(destination: destination)
         await receive(VideoUpdate("작업 폴더 준비", directory: session.directory))
         do {
-            let (needed, overflow) = source.size.multipliedReportingOverflow(by: 2)
-            guard !overflow else { throw VideoError.failed("입력 크기가 너무 큽니다.") }
+            let (mediaBudget, overflow) = source.size.multipliedReportingOverflow(by: 3)
+            let (needed, overheadOverflow) = mediaBudget.addingReportingOverflow(1024 * 1024 * 1024)
+            guard !overflow, !overheadOverflow else { throw VideoError.failed("입력 크기가 너무 큽니다.") }
             try session.checkSpace(needed)
             try await session.writeJSON(tools.evidence(), named: "tools.json")
             let referenceValidation = try await VideoValidator.validate(reference, tools: tools, session: session, prefix: "reference", receive: receive)
@@ -37,20 +38,54 @@ public enum VideoRecovery {
                 throw VideoError.failed("엔진에서 유효한 프레임 복구 결과를 받지 못했습니다.")
             }
             try source.unchanged(); try template.unchanged()
+            let aggregate = try VideoInput(elementary)
+            try report.validateSegments(outputSize: aggregate.size, inputSize: source.size)
             try session.writeJSON(report, named: "native-report.json")
-            let output = try session.path("recovered-video.mp4")
-            await receive(VideoUpdate("복구한 프레임을 영상 파일로 저장하고 있습니다"))
-            let mux = try await ToolProcess.run(executable: tools.ffmpeg,
-                arguments: ["-nostdin", "-v", "error", "-fflags", "+genpts", "-r", "\(report.fps_num)/\(report.fps_den)", "-f", report.codec,
-                    "-i", elementary.path, "-map", "0:v:0", "-c:v", "copy", "-n", output.path], timeout: 3600, outputLimit: 512 * 1024)
-            try session.write(mux.stderr, named: "mux.log"); try checked(mux)
-            let validation = try await VideoValidator.validate(output, tools: tools, session: session, prefix: "recovered", receive: receive)
-            let warnings = report.warnings + ["영상 트랙만 부분 복구했습니다. 음성과 원래 타임스탬프는 복원하지 않았습니다.", "재생 속도는 참고 영상의 평균 프레임 속도를 사용합니다. 원본 완전성과 장면 순서는 보장하지 않습니다."]
-            let result = VideoResult(file: output.lastPathComponent, sha256: try VideoInput(output).sha256(), method: "native_nal_salvage", validation: validation, warnings: warnings)
+            let (remaining, remainingOverflow) = aggregate.size.multipliedReportingOverflow(by: 2)
+            guard !remainingOverflow else { throw VideoError.failed("영상 구간의 크기가 너무 큽니다.") }
+            try session.checkSpace(remaining)
+            struct Evidence: Encodable { let segment: VideoSegment; let result: VideoResult }
+            var results: [VideoResult] = []
+            for segment in report.segment_map {
+                try Task.checkCancellation(); try source.unchanged(); try template.unchanged()
+                let prefix = String(format: "segment-%04d", segment.id)
+                await receive(VideoUpdate("\(segment.id)/\(report.segments) 구간 분리 및 해시 검사"))
+                let part = try session.copySegment(from: aggregate, segment: segment, named: "\(prefix).es")
+                let partSnapshot = try VideoInput(part)
+                guard try partSnapshot.sha256() == segment.sha256 else { throw VideoError.failed("분리한 영상 구간이 변경되었습니다.") }
+                let output = try session.path(report.segments == 1 ? "recovered-video.mp4" : "\(prefix).mp4")
+                await receive(VideoUpdate("\(segment.id)/\(report.segments) 구간을 별도 영상으로 저장하고 있습니다"))
+                try partSnapshot.unchanged()
+                let mux = try await ToolProcess.run(executable: tools.ffmpeg,
+                    arguments: ["-nostdin", "-v", "error", "-max_alloc", "268435456", "-fflags", "+genpts",
+                        "-r", "\(report.fps_num)/\(report.fps_den)", "-f", report.codec,
+                        "-i", part.path, "-map", "0:v:0", "-c:v", "copy", "-avoid_negative_ts", "make_zero", "-n", output.path], timeout: 3600, outputLimit: 512 * 1024)
+                try session.write(mux.stderr, named: "\(prefix)-mux.log")
+                try session.checkSpace(0)
+                let validation: VideoValidation
+                let retainedFile: URL
+                let retainedSnapshot: VideoInput
+                if mux.status == 0 {
+                    retainedSnapshot = try VideoInput(output)
+                    validation = try await VideoValidator.validate(output, tools: tools, session: session, prefix: prefix, receive: receive)
+                    retainedFile = output
+                } else {
+                    validation = VideoValidation(status: "failed", tracks: [], diagnostics: "영상 파일 구성 실패 (\(mux.status)): " + String(decoding: mux.stderr, as: UTF8.self))
+                    retainedFile = part
+                    retainedSnapshot = partSnapshot
+                }
+                let warnings = ["영상 트랙만 부분 복구했습니다. 음성과 원래 타임스탬프는 복원하지 않았습니다.",
+                    "재생 속도는 참고 영상에서 추정했습니다. 디코딩 통과도 원본 픽셀·완전성을 보장하지 않습니다.",
+                    "구간 번호는 발견 순서이며 촬영 순서를 뜻하지 않습니다. 끊어진 구간끼리 자동 연결하지 않았습니다."]
+                let result = VideoResult(file: retainedFile.lastPathComponent, sha256: try retainedSnapshot.sha256(), method: "native_nal_salvage", validation: validation, warnings: warnings)
+                try source.unchanged(); try template.unchanged(); try aggregate.unchanged(); try partSnapshot.unchanged()
+                try session.writeJSON(Evidence(segment: segment, result: result), named: "\(prefix)-result.json")
+                results.append(result)
+            }
             try source.unchanged(); try template.unchanged()
-            try session.writeJSON([result], named: "results.json")
-            if validation.passed { try session.finish() }
-            return VideoOutcome(directory: session.directory, results: [result])
+            try session.writeJSON(results, named: "results.json")
+            if results.allSatisfy({ $0.validation.passed }) { try session.finish() }
+            return VideoOutcome(directory: session.directory, results: results)
         } catch { session.failed(error); throw error }
     }
     public static func extract(image: URL, scan: VideoScan, candidates: [VideoCandidate], destination: URL,
@@ -80,9 +115,11 @@ public enum VideoRecovery {
                     arguments: ["video-extract", image.path, output.path], input: request, timeout: 3600,
                     receive: progress("\(candidate.name) 조각 복원", receive))
                 try session.write(operation.stderr, named: "\(prefix)-extract.log"); try checked(operation)
+                let outputSnapshot = try VideoInput(output)
                 guard let hash = try completion(operation.stdout).sha256, hash.count == 64,
-                      hash == (try VideoInput(output).sha256()) else { throw VideoError.failed("복원 파일의 해시가 일치하지 않습니다.") }
+                      hash == (try outputSnapshot.sha256()) else { throw VideoError.failed("복원 파일의 해시가 일치하지 않습니다.") }
                 let validation = try await VideoValidator.validate(output, tools: tools, session: session, prefix: prefix, receive: receive)
+                try outputSnapshot.unchanged()
                 let result = VideoResult(file: output.lastPathComponent, sha256: hash, method: "exfat_extent_recovery", validation: validation,
                     warnings: candidate.deleted ? ["삭제된 파일의 남은 메타데이터를 사용했습니다. 과거 원본과의 동일성은 확정할 수 없습니다."] : [])
                 results.append(result)

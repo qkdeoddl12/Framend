@@ -34,8 +34,64 @@ The optional `--video-exfat-fixture IMAGE DESTINATION` Swift check is a private,
 
 ## Coverage and limits
 
-58 Rust tests passed (2 format, 12 original pipeline, 25 exFAT, 19 native video). Strict Clippy and Swift integration checks passed. The GUI flow selected the real image, found two videos, exported to the external drive and displayed per-track full-decode results.
+63 Rust tests passed (2 export, 12 original pipeline, 25 exFAT, 24 native video). Strict Clippy and Swift integration checks passed. The earlier GUI flow selected the real image, found two videos, exported to the external drive and displayed per-track full-decode results.
 
 Rust tests exercise exFAT boot/backup checksums, cycles, deleted and active streams, bitmap reallocation, crosslinks, forged requests, aliases, cancellation and a sparse 513MiB candidate. Native-video tests exercise codec headers, access units, unsafe starts, malformed/truncated data, random data and source/output protection. Swift checks cover subprocess groups, timeout/cancellation, inherited pipes, byte limits, source changes, session replacement and real decode orchestration.
 
 Not yet established: recovery-rate comparison with commercial tools, camera/firmware coverage beyond the named samples, all X-T5 recording modes, arbitrary fragment rearrangement, physically failing SD cards, or learned-model benefit. [Research and AI proposal](research/native-video-and-ai.md).
+
+## Independent segments (0.3)
+
+Additional generated-media cases use two visually different clips with matching
+codec settings, separated by 4096 unknown bytes. Both H.264 and HEVC:
+
+- Intact runs: two independent outputs, 30 + 30 frames, each pixel-identical to its
+  respective source. Neither output contains pictures from the other run.
+- Corrupted first run: its full decode fails; the second still recovers all 30
+  frames with exact pixel hashes. Swift returns both results and keeps INCOMPLETE.
+- Mid-NAL cut followed by junk: H.264 first run decodes 19 frames, HEVC 16; **these
+  are not exact original prefixes**. A NAL's stored length can consume following
+  junk and yield a changed final picture that the decoder accepts. The second
+  independent run still matches all 30 original frames in both cases.
+
+The third case deliberately records `exact_pixel_prefix: false`. It is a measured
+limitation, not a successful exact-recovery claim; structural checks and strict
+decoding cannot establish pixel fidelity without original ground truth. No model
+or generated pixels are used. The six new cases run through the native CLI and
+through Swift's actual split/copy/hash/mux/decode pipeline on the external drive.
+
+Native tests cover unknown bytes, distinct mdat ranges, picture mismatch, exact
+hash/range partitioning and explicit 257th-run rejection. Swift tests reject bad
+maps (overlap, gaps, overflow, inconsistent counts and source extents), verify
+exclusive bounded copy including nonzero offsets across the 1MiB buffer boundary,
+and exercise cancellation/source replacement. Per-segment logs and evidence are
+kept even when another segment fails. Source/read errors, cancellation and invalid
+protocol still terminate the overall operation. Child-process resource/launch
+failures and app-owned output I/O errors also stop the session; a nonzero muxer or
+decoder exit is retained with diagnostics without assuming media corruption.
+
+Review regressions replace either the copied ES or the muxed MP4 at an awaited
+progress callback. Both codecs reject the replacement before recording successful
+provenance. A decoder that exits before creating framehash evidence is an individual
+failed result; a replaced output directory remains a fatal session error.
+
+The generated suite now contains 12 cases. Two added B-frame layouts expose an
+unresolved timing limitation: the saved MP4 has non-monotonic decoded timestamps.
+Strict validation fails and Swift keeps the raw stream and INCOMPLETE marker.
+These are failure-detection cases, not successful B-frame recovery claims.
+
+A real X-T5 metadata-erased copy produces 32 independent runs at unknown padding
+boundaries. Initially one 30-picture run muxed with only 27 decoded pictures.
+Shifting leading timestamps with `-avoid_negative_ts make_zero` restored 30 per
+run: all 32 outputs decode, and their combined 960 pixel hashes match the healthy
+source. This option shifts timestamps; it does not reconstruct original timing
+or solve the generated B-frame failures. See the [FFmpeg format option](https://ffmpeg.org/ffmpeg-formats.html#Format-Options).
+The healthy reference here is the same original recording, so this remains a
+structural self-check rather than independent-real-reference compatibility proof.
+No output movie joins those 32 runs; physical boundaries can split one recording
+into many short files. Both input hashes remained unchanged.
+
+The rebuilt 0.3.0 app was exercised through the native macOS file pickers and repair
+button with that X-T5 copy, healthy reference and external destination. Its 32
+results all passed full decode (960 frames total), with individual reports and no
+INCOMPLETE marker. The app was left displaying those partial-recovery results.

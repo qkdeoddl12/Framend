@@ -23,7 +23,7 @@ struct VideoRecoveryView: View {
                     fileRow(model.mode == .repair ? "손상 영상" : "카드 복제본", url: model.input, kind: "input")
                     if model.mode == .repair { fileRow("정상 참고 영상", url: model.reference, kind: "reference") }
                     fileRow("저장 폴더", url: model.destination, kind: "destination")
-                    Text(model.mode == .repair ? "같은 카메라·코덱·해상도·프레임 속도의 정상 영상이 필요합니다. 영상 트랙만 부분 복구하며 음성과 원래 재생 시간은 복원하지 않습니다." : "exFAT 파일 목록에 남은 MOV·MP4의 저장 순서를 확인합니다. 파일 목록이 사라진 경우에는 후보가 없을 수 있습니다.")
+                    Text(model.mode == .repair ? "같은 카메라·코덱·해상도·프레임 속도의 정상 영상이 필요합니다. 영상 트랙만 부분 복구하며 음성과 원래 재생 시간은 복원하지 않습니다. 끊어진 구간은 각각 별도 파일로 저장합니다." : "exFAT 파일 목록에 남은 MOV·MP4의 저장 순서를 확인합니다. 파일 목록이 사라진 경우에는 후보가 없을 수 있습니다.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(6)
             }
@@ -33,6 +33,9 @@ struct VideoRecoveryView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(result.file).font(.headline)
                         Text(result.label).foregroundStyle(result.validation.passed ? .green : .orange)
+                        if !result.validation.diagnostics.isEmpty {
+                            Text(result.validation.diagnostics).font(.caption).foregroundStyle(.orange).textSelection(.enabled).lineLimit(4)
+                        }
                         ForEach(result.validation.tracks, id: \.index) { track in
                             Text("\(track.type) · \(track.codec) · \(track.decodedFrames) 프레임" + (track.decodedSamples > 0 ? " · \(track.decodedSamples) 음성 샘플" : ""))
                                 .font(.caption).foregroundStyle(.secondary)

@@ -1,4 +1,5 @@
 use recovery_engine::native_video::salvage;
+use sha2::{Digest, Sha256};
 use std::{fs, io, os::unix::fs::symlink};
 use tempfile::TempDir;
 
@@ -158,6 +159,92 @@ fn run(data: &[u8]) -> (TempDir, recovery_engine::native_video::SalvageReport) {
     )
     .unwrap();
     (dir, report)
+}
+
+#[test]
+fn segment_map_partitions_output_and_source_extents_at_unknown_gaps() {
+    let chain = pack(&[slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]);
+    let mut data = chain.clone();
+    data.extend([0xff; 17]);
+    data.extend(&chain);
+    let (dir, report) = run(&data);
+    let json = serde_json::to_value(&report).unwrap();
+    let segments = json["segment_map"]
+        .as_array()
+        .expect("missing segment evidence");
+    assert_eq!(segments.len(), 2);
+    let output = fs::read(dir.path().join("video.h264")).unwrap();
+    let mut cursor = 0;
+    for (i, segment) in segments.iter().enumerate() {
+        assert_eq!(segment["id"], i + 1);
+        assert_eq!(segment["output_offset"], cursor);
+        assert_eq!(segment["frames"], 3);
+        assert_eq!(segment["extent_start"], i);
+        assert_eq!(segment["extent_count"], 1);
+        let length = segment["output_length"].as_u64().unwrap() as usize;
+        assert!(length > chain.len()); // includes reference parameter sets
+        assert_eq!(
+            segment["sha256"],
+            format!("{:x}", Sha256::digest(&output[cursor..cursor + length]))
+        );
+        cursor += length;
+    }
+    assert_eq!(cursor, output.len());
+    assert_eq!(segments[0]["end_reason"], "unknown_bytes");
+    assert_eq!(segments[1]["end_reason"], "range_end");
+    assert_eq!(report.extents[1].offset, (chain.len() + 17) as u64);
+}
+
+#[test]
+fn segment_map_preserves_one_contiguous_run_across_idr_pictures() {
+    let chain = pack(&[slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]);
+    let (_, report) = run(&[chain.clone(), chain].concat());
+    let json = serde_json::to_value(report).unwrap();
+    assert_eq!(json["segment_map"].as_array().unwrap().len(), 1);
+    assert_eq!(json["segment_map"][0]["frames"], 6);
+}
+
+#[test]
+fn segment_map_splits_distinct_mdat_ranges() {
+    let chain = pack(&[slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]);
+    let (_, report) = run(&[atom(b"mdat", &chain), atom(b"mdat", &chain)].concat());
+    let json = serde_json::to_value(report).unwrap();
+    assert_eq!(json["segment_map"].as_array().unwrap().len(), 2);
+    assert_eq!(json["segment_map"][0]["end_reason"], "range_end");
+}
+
+#[test]
+fn segment_map_closes_run_on_picture_mismatch() {
+    let mut nals = vec![slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)];
+    nals.push(slice(false, 3, 1)); // continuation belongs to a different picture
+    nals.extend([slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]);
+    let (_, report) = run(&pack(&nals));
+    let json = serde_json::to_value(report).unwrap();
+    assert_eq!(json["segment_map"][0]["end_reason"], "picture_mismatch");
+    assert_eq!(json["segment_map"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn segment_limit_fails_explicitly_instead_of_silently_truncating() {
+    let dir = tempdir();
+    let chain = pack(&[slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]);
+    let mut data = Vec::new();
+    for _ in 0..257 {
+        data.extend(&chain);
+        data.extend([0xff; 9]);
+    }
+    let input = dir.path().join("input");
+    let reference_path = dir.path().join("reference");
+    fs::write(&input, data).unwrap();
+    fs::write(&reference_path, reference(false)).unwrap();
+    let error = salvage(
+        &input,
+        &reference_path,
+        &dir.path().join("output"),
+        |_, _| Ok(()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("segment limit"), "{error}");
 }
 
 #[test]

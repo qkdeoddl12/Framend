@@ -1,5 +1,42 @@
 # Recovery Card implementation ledger
 
+## 2026-10-17 independent video segments (continuation)
+
+- User authorized continued implementation. Ruling: address unsafe cross-gap
+  concatenation and failure isolation before arbitrary fragment ranking/reordering.
+- Rust report now maps independent runs to aggregate ES byte ranges, source extent
+  indices, structural frame counts, SHA-256 and end reasons; 256-run resource cap.
+- Swift validates the complete map, copies with bounded reads/exclusive writes,
+  muxes/decodes each run separately, and records per-run evidence. Original files
+  remain read-only and all bulk tests are on the external destination.
+- RED: five new Rust tests failed on missing segment evidence/limit. GREEN: all 63
+  Rust tests and strict Clippy passed. Swift previously returned one merged result;
+  new integration test caught it, then passed for H.264/HEVC separate outputs.
+- Generated mixed clips yield separate 30+30 exact-pixel frames for each codec.
+  Corrupt-first/healthy-second keeps the healthy 30-frame result and records failure.
+- Ruling: a mid-NAL cut consumes junk within the declared length and can decode
+  changed pixels (observed H.264 final picture). Record exact_pixel_prefix=false;
+  do not call decoder success exact recovery. Later intact run is still pixel-exact.
+- Independent review reproduced ES and MP4 replacement during progress callbacks;
+  pinned snapshots now span mux/validation and final hashing. Both-codec regressions
+  pass. An early decoder exit before framehash creation now remains a failed result,
+  while app-owned session I/O and child resource/launch failures still abort.
+- Real X-T5 sample splits into 32 runs. Leading timestamp adjustment fixes a measured
+  27/30 decoded-picture loss per run; all 960 pixels now match the source across the
+  32 outputs. Same-original reference only; no original-timing or reassembly claim.
+- Two additional synthetic B-frame layouts still fail strict timestamp validation.
+  The 12-case generated suite records these failures explicitly and preserves raw
+  evidence; universal B-frame timing reconstruction remains unfinished.
+- Focused independent re-review found no remaining blocker. Version 0.3.0 builds
+  and passes strict local code-sign verification. Final Swift protocol/photo/video,
+  process, replacement, failure-isolation and CLI smoke checks passed. The rebuilt
+  app's real X-T5 GUI run saved 32 independently decoded clips (960 total frames)
+  on the external drive, with results and per-run evidence and no incomplete marker.
+- Local helper's UI/version edit exited 3 (invalid edit blocks); completed that
+  operation directly without retry. Worklog records results and remaining limits.
+
+## Earlier implementation history
+
 Plan: `docs/superpowers/plans/2026-10-16-recovery-preview.md`
 
 - User approved proceeding with the preceding design. Implementing inline without another approval round.
