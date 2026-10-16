@@ -1,0 +1,12 @@
+.DS_Store
+target/
+.build/
+dist/
+.superpowers/
+.swiftpm/
+fixtures/generated/
+*.img
+*.dd
+*.raw
+*.raf
+*.RAF
