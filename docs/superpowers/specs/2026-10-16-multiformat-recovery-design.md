@@ -39,5 +39,12 @@
 - [PhotoRec](https://www.cgsecurity.org/wiki/PhotoRec): GPL v2+, 읽기 전용 접근, 다양한 파일 형식.
 - [PhotoRec 사용 문서](https://www.cgsecurity.org/testdisk_doc/photorec.html): 파일명/폴더 한계, 형식 선택과 파일 경계, 중단된 작업.
 - [스크립트 실행](https://www.cgsecurity.org/testdisk_doc/scripted_run.html): 인자와 명령, 로그·출력 디렉터리 지정.
+- [ExifTool FujiFilm source](https://github.com/exiftool/exiftool/blob/master/lib/Image/ExifTool/FujiFilm.pm)
+
+## 실제 테스트 후속 조치
+
+실제 카드에서 첫 번째 RAW 영역까지만 추출하면 M-RAW의 추가 노출 데이터가 잘리는 문제가 확인됐다. 공개 전에 M-RAW 헤더에 선언된 전체 프레임 범위를 보존해야 한다. 추가 프레임을 독립 파일로 오인하지 않는 것만으로는 충분하지 않다. 별도 작업으로 다중 이미지 파일 2개를 원본 복제본에서 바이트 변경 없이 추출했다.
+
+LibRaw 센서 데이터 검사와 영상 전체 프레임 디코딩은 별도 운영 도구에서 검증했다. 현재 앱에 통합된 기능으로 표시하지 않는다. 다중 이미지 파일의 추가 노출 데이터는 범위와 보존 여부만 확인했고 개별 디코딩은 미실시다.
 
 상태: 사용자 요구를 반영한 구현 전 설계. 독립 검토에서 제기된 손상 파일 보존 범위는 위의 명시적 분류로 반영했다. 새 기능 구현과 공개 여부는 검토 후 확정한다.
