@@ -3,10 +3,12 @@ import ImageIO
 import CoreGraphics
 
 public enum MediaValidation: String, Codable, Sendable {
-    case jpegDecoded, rawUnverified, failed, unchecked
+    case jpegDecoded, pngDecoded, audioUnverified, rawUnverified, failed, unchecked
     public var label: String {
         switch self {
         case .jpegDecoded: "JPEG 디코딩 확인"
+        case .pngDecoded: "PNG 디코딩 확인"
+        case .audioUnverified: "오디오 디코딩 미검증"
         case .rawUnverified: "RAW 전체 디코딩 미검증"
         case .failed: "이미지 디코딩 실패"
         case .unchecked: "검증 제한 초과 · 미검증"
@@ -16,9 +18,11 @@ public enum MediaValidation: String, Codable, Sendable {
 
 public enum MediaInspector {
     public static func validate(url: URL, format: Candidate.Format) -> MediaValidation {
-        guard format == .jpeg else { return .rawUnverified }
+        if format == .raf { return .rawUnverified }
+        if format == .wav { return .audioUnverified }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               CGImageSourceGetStatus(source) == .statusComplete,
+              CGImageSourceGetType(source) as String? == (format == .png ? "public.png" : "public.jpeg"),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
@@ -31,10 +35,11 @@ public enum MediaInspector {
                                       bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return .failed }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return .jpegDecoded
+        return format == .png ? .pngDecoded : .jpegDecoded
     }
 
     public static func thumbnail(imageURL: URL, candidate: Candidate) throws -> CGImage? {
+        guard candidate.format != .wav else { return nil }
         let values = try imageURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
         let handle = try FileHandle(forReadingFrom: imageURL)

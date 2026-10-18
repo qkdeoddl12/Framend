@@ -18,6 +18,14 @@ let checks: [(String, () throws -> Void)] = [
         let value = try event(#"{"event":"candidate","candidate":{"offset":1024,"length":100000,"format":"raf","camera":"X-T5"}}"#)
         try check(value.candidate?.statusLabel == "구조 확인 · RAW 미검증", "RAF status overclaims validation")
     }),
+    ("PNG and WAVE events retain truthful formats and names", {
+        for (format, name) in [("png", "10.png"), ("wav", "10.wav")] {
+            let json = "{\"event\":\"candidate\",\"candidate\":{\"offset\":16,\"length\":100,\"format\":\"\(format)\"}}"
+            let value = try event(json)
+            try check(value.candidate?.filename == name, "New format received a RAW filename")
+            try check(value.candidate?.statusLabel.contains("RAW") == false, "New format received a RAW verdict")
+        }
+    }),
     ("Missing completion fails", {
         var validator = StreamValidator()
         try validator.accept(event(#"{"event":"progress","scanned":5,"total":10}"#))
@@ -41,6 +49,21 @@ let checks: [(String, () throws -> Void)] = [
     }),
     ("RAW remains unverified", {
         try check(MediaInspector.validate(url: URL(fileURLWithPath: "/nonexistent/test.raf"), format: .raf) == .rawUnverified, "RAW must not claim decoder support")
+    }),
+    ("PNG validation and WAVE inspection use their own verdicts", {
+        try check(MediaInspector.validate(url: URL(fileURLWithPath: "/nonexistent/test.png"), format: .png) == .failed, "Missing PNG was not rejected")
+        try check(MediaInspector.validate(url: URL(fileURLWithPath: "/nonexistent/test.wav"), format: .wav) == .audioUnverified, "WAVE must stay audio-unverified")
+        let value = try event(#"{"event":"candidate","candidate":{"offset":0,"length":8,"format":"wav"}}"#)
+        let preview = try MediaInspector.thumbnail(imageURL: URL(fileURLWithPath: "/nonexistent/test.wav"), candidate: value.candidate!)
+        try check(preview == nil, "WAVE must not enter the image decoder")
+    }),
+    ("Real PNG pixels decode without a JPEG or RAW label", {
+        let bytes = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGOoBwAAgQCA05RTSgAAAABJRU5ErkJggg==")!
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try bytes.write(to: file)
+        try check(MediaInspector.validate(url: file, format: .png) == .pngDecoded, "Valid PNG pixels did not decode")
+        try check(MediaInspector.validate(url: file, format: .jpeg) == .failed, "False JPEG extension received a successful verdict")
     }),
     ("Event after completion fails", {
         var validator = StreamValidator()
@@ -77,7 +100,11 @@ if CommandLine.arguments.contains("--integration") {
         let photos = results.compactMap(\.candidate)
         try check(photos.count == 2 && results.last?.event == .complete, "Swift bridge lost scan events")
         guard let source = results.first?.source else { throw CheckFailure(description: "No source fingerprint") }
-        let temporary = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        guard let physicalTemporary = realpath(FileManager.default.temporaryDirectory.path, nil) else {
+            throw CheckFailure(description: "Cannot resolve temporary directory")
+        }
+        let temporary = URL(fileURLWithPath: String(cString: physicalTemporary)).appending(path: UUID().uuidString)
+        free(physicalTemporary)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
         let exported = CollectedEvents()

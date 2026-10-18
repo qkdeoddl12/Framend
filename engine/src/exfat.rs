@@ -2,6 +2,7 @@
 //!
 //! Structures and checksums follow Microsoft's exFAT 1.00 specification:
 //! https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification
+use crate::platform::GuardedOutput;
 use crate::{
     SourceFingerprint,
     source::{Source, invalid},
@@ -10,14 +11,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    ffi::CString,
-    fs::File,
     io::{self, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::ffi::OsStrExt,
-    },
-    path::{Component, Path},
+    path::Path,
 };
 
 const MAX_CHAIN_CLUSTERS: u64 = 4_194_304;
@@ -64,9 +59,24 @@ pub struct ExfatScan {
 /// `recoverable` only means extraction is supported; it is not a decode verdict.
 pub fn analyze(path: &Path) -> io::Result<ExfatScan> {
     let source = Source::open(path)?;
-    let scan = analyze_source(&source)?;
+    let scan = analyze_source(&source, Scope::Video)?;
     source.unchanged()?;
     Ok(scan)
+}
+
+/// Discover regular files by their metadata, independently of their extension/content.
+/// This verifies byte ownership and extents, not the internal format or decoding.
+pub fn analyze_files(path: &Path) -> io::Result<ExfatScan> {
+    let source = Source::open(path)?;
+    let scan = analyze_source(&source, Scope::Files)?;
+    source.unchanged()?;
+    Ok(scan)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Video,
+    Files,
 }
 
 /// Revalidate the original scan, create a new output, and copy the logical bytes.
@@ -78,16 +88,55 @@ pub fn extract(
     candidate: &ExfatCandidate,
     mut progress: impl FnMut(u64, u64) -> io::Result<()>,
 ) -> io::Result<String> {
+    extract_scoped(
+        path,
+        output,
+        expected_source,
+        candidate,
+        &mut progress,
+        Scope::Video,
+    )
+}
+
+/// Extract any regular file after revalidating its original exFAT metadata.
+/// A successful copy/hash does not establish that the file decodes or was never overwritten.
+pub fn extract_file(
+    path: &Path,
+    output: &Path,
+    expected_source: &SourceFingerprint,
+    candidate: &ExfatCandidate,
+    mut progress: impl FnMut(u64, u64) -> io::Result<()>,
+) -> io::Result<String> {
+    extract_scoped(
+        path,
+        output,
+        expected_source,
+        candidate,
+        &mut progress,
+        Scope::Files,
+    )
+}
+
+fn extract_scoped(
+    path: &Path,
+    output: &Path,
+    expected_source: &SourceFingerprint,
+    candidate: &ExfatCandidate,
+    progress: &mut impl FnMut(u64, u64) -> io::Result<()>,
+    scope: Scope,
+) -> io::Result<String> {
     let source = Source::open(path)?;
     if &source.fingerprint != expected_source {
         return Err(invalid("Source changed; scan the image again"));
     }
-    validate_extents(
-        &candidate.extents,
-        candidate.length,
-        source.fingerprint.size,
-    )?;
-    let scan = analyze_source(&source)?;
+    if scope != Scope::Files || candidate.length != 0 || !candidate.extents.is_empty() {
+        validate_extents(
+            &candidate.extents,
+            candidate.length,
+            source.fingerprint.size,
+        )?;
+    }
+    let scan = analyze_source(&source, scope)?;
     let found = scan
         .candidates
         .iter()
@@ -596,7 +645,7 @@ fn allocated_count(
                 "Total allocation bitmap scan-work limit exceeded",
             ));
         }
-        while first < end && first % 8 != 0 {
+        while first < end && !first.is_multiple_of(8) {
             total += u64::from(bitmap[(first / 8) as usize] >> (first % 8) & 1);
             first += 1;
         }
@@ -718,7 +767,7 @@ fn add_claims(
     Ok(())
 }
 
-fn analyze_source(source: &Source) -> io::Result<ExfatScan> {
+fn analyze_source(source: &Source, scope: Scope) -> io::Result<ExfatScan> {
     let mut scan = ExfatScan {
         source: source.fingerprint.clone(),
         candidates: Vec::new(),
@@ -734,12 +783,12 @@ fn analyze_source(source: &Source) -> io::Result<ExfatScan> {
             fat_cache: Vec::new(),
             chain_work: 0,
         };
-        scan_volume(&mut parser, &mut scan)?;
+        scan_volume(&mut parser, &mut scan, scope)?;
     }
     Ok(scan)
 }
 
-fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> {
+fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan, scope: Scope) -> io::Result<()> {
     let root = parser.chain(parser.geometry.root, None, false, MAX_DIRECTORY_BYTES)?;
     let root_bytes = parser.read_stream(&root, MAX_DIRECTORY_BYTES)?;
     let mut bitmap_entry = None;
@@ -909,10 +958,10 @@ fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> 
                 );
                 continue;
             }
-            if entry.deleted && !video {
+            if entry.deleted && !video && scope == Scope::Video {
                 continue;
             }
-            if entry.length == 0 && entry.first == 0 && !video {
+            if entry.length == 0 && entry.first == 0 && !video && scope == Scope::Video {
                 continue;
             }
             let maximum = if entry.directory {
@@ -921,13 +970,21 @@ fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> 
                 parser.geometry.end - parser.geometry.heap
             };
             let mut extents = Vec::new();
-            let chain_result = parser.chain_into(
-                entry.first,
-                Some(entry.length),
-                entry.contiguous,
-                maximum,
-                &mut extents,
-            );
+            let chain_result = if scope == Scope::Files
+                && !entry.directory
+                && entry.length == 0
+                && entry.first == 0
+            {
+                Ok(())
+            } else {
+                parser.chain_into(
+                    entry.first,
+                    Some(entry.length),
+                    entry.contiguous,
+                    maximum,
+                    &mut extents,
+                )
+            };
             let mut reason = None;
             if entry.valid_length != entry.length {
                 reason = Some(
@@ -992,7 +1049,7 @@ fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> 
                 }
                 continue;
             }
-            if !video {
+            if !video && scope == Scope::Video {
                 if let Some(reason) = reason {
                     warning(
                         &mut scan.warnings,
@@ -1003,15 +1060,15 @@ fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> 
             }
             candidate_extents += extents.len();
             if candidate_extents > MAX_CLAIMS {
-                return Err(unsupported("Total video extent limit exceeded"));
+                return Err(unsupported("Total candidate extent limit exceeded"));
             }
-            if reason.is_none() {
+            if reason.is_none() && scope == Scope::Video {
                 if let Err(error) = container_header(parser.source, &extents, entry.length) {
                     reason = Some(error.to_string());
                 }
             }
             if scan.candidates.len() >= MAX_CANDIDATES {
-                return Err(unsupported("Video candidate limit exceeded"));
+                return Err(unsupported("File candidate limit exceeded"));
             }
             scan.candidates.push(ExfatCandidate {
                 id,
@@ -1056,7 +1113,7 @@ fn scan_volume(parser: &mut Parser<'_>, scan: &mut ExfatScan) -> io::Result<()> 
         .iter()
         .any(|candidate| candidate.deleted)
     {
-        warning(&mut scan.warnings, "Deleted entries are residual metadata; a free bitmap and plausible header do not prove that data was never overwritten".to_owned());
+        warning(&mut scan.warnings, "Deleted entries are residual metadata; a free bitmap and valid extents do not prove that data was never overwritten".to_owned());
     }
     Ok(())
 }
@@ -1092,70 +1149,6 @@ fn validate_extents(extents: &[Extent], length: u64, source_size: u64) -> io::Re
     Ok(())
 }
 
-fn create_output(path: &Path, length: u64) -> io::Result<File> {
-    let path = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let name = path
-        .file_name()
-        .ok_or_else(|| invalid("Output filename missing"))?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("Output parent missing"))?;
-    let mut directory = File::open("/")?;
-    // Pin each directory descriptor: a symlink or concurrent path replacement must
-    // not redirect the exclusive file creation outside the chosen session.
-    for component in parent.components() {
-        match component {
-            Component::RootDir | Component::CurDir => continue,
-            Component::Normal(name) => {
-                let name =
-                    CString::new(name.as_bytes()).map_err(|_| invalid("NUL in output path"))?;
-                // SAFETY: directory and name remain alive; a successful fd is owned here.
-                let fd = unsafe {
-                    libc::openat(
-                        directory.as_raw_fd(),
-                        name.as_ptr(),
-                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                    )
-                };
-                if fd < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // SAFETY: openat returned a new, exclusively owned file descriptor.
-                directory = unsafe { File::from_raw_fd(fd) };
-            }
-            _ => return Err(invalid("Parent traversal in output path is not allowed")),
-        }
-    }
-    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: stats points to writable storage; fstatvfs initializes it on success.
-    if unsafe { libc::fstatvfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the preceding successful fstatvfs initialized every field.
-    let stats = unsafe { stats.assume_init() };
-    let free = u128::from(stats.f_bavail) * u128::from(stats.f_frsize);
-    if free < u128::from(length) {
-        return Err(io::Error::other(
-            "Insufficient free space for recovered video",
-        ));
-    }
-    let name = CString::new(name.as_bytes()).map_err(|_| invalid("NUL in output filename"))?;
-    // SAFETY: valid directory fd/name; create_new semantics protect all existing paths.
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: openat returned a new, exclusively owned file descriptor.
-    Ok(unsafe { File::from_raw_fd(fd) })
+fn create_output(path: &Path, length: u64) -> io::Result<GuardedOutput> {
+    GuardedOutput::create(path, length)
 }

@@ -1,6 +1,6 @@
 use crate::{
     Event, Format,
-    formats::{RAF_MAGIC, parse},
+    formats::{PNG_MAGIC, RAF_MAGIC, parse},
     source::{Source, invalid},
 };
 use std::{
@@ -32,6 +32,10 @@ pub fn scan(path: &Path, mut emit: impl FnMut(Event) -> io::Result<()>) -> io::R
             let tail = &buffer[i..count_bytes];
             let format = if tail.starts_with(RAF_MAGIC) {
                 Some(Format::Raf)
+            } else if tail.starts_with(PNG_MAGIC) {
+                Some(Format::Png)
+            } else if tail.len() >= 12 && &tail[..4] == b"RIFF" && &tail[8..12] == b"WAVE" {
+                Some(Format::Wav)
             } else if tail.starts_with(&[0xff, 0xd8, 0xff]) {
                 Some(Format::Jpeg)
             } else {

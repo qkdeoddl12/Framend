@@ -56,7 +56,7 @@ final class RecoveryModel {
         guard let imageURL, !isBusy else { return }
         candidates = []; selection = []; validationLabels = [:]; outputURL = nil
         source = nil; progress = 0; scanComplete = false
-        phase = .scanning; status = "JPEG·RAF 파일 구조를 찾고 있습니다…"
+        phase = .scanning; status = "JPEG·RAF·PNG·WAVE 파일 구조를 찾고 있습니다…"
         operation = Task {
             do {
                 let engine = try EngineClient.locateEngine()
@@ -66,7 +66,7 @@ final class RecoveryModel {
                 try Task.checkCancellation()
                 scanComplete = source != nil
                 phase = .scanned
-                status = candidates.isEmpty ? "연속 저장된 JPEG·RAF 후보를 찾지 못했습니다." : "\(candidates.count)개 후보를 찾았습니다. 저장할 파일을 선택하세요."
+                status = candidates.isEmpty ? "연속 저장된 JPEG·RAF·PNG·WAVE 후보를 찾지 못했습니다." : "\(candidates.count)개 후보를 찾았습니다. 저장할 파일을 선택하세요."
             } catch { handle(error) }
             operation = nil
         }
@@ -112,7 +112,7 @@ final class RecoveryModel {
                     }
                     await self?.receiveExport(event)
                 }
-                status = "저장한 JPEG의 픽셀 데이터를 검사합니다…"
+                status = "저장한 이미지의 픽셀 데이터를 검사합니다…"
                 var report: [ValidationRecord] = []
                 let files = await saved.files
                 for (index, file) in files.enumerated() {
@@ -130,7 +130,7 @@ final class RecoveryModel {
                     try encoder.encode(report).write(to: outputURL.appending(path: "validation.json"), options: .withoutOverwriting)
                 }
                 phase = .done; progress = 1
-                status = "\(selected.count)개 저장 완료 · RAF는 RAW 전체 디코딩 미검증입니다."
+                status = "\(selected.count)개 저장 완료 · RAF RAW와 WAVE 오디오 디코딩은 미검증입니다."
             } catch { handle(error) }
             operation = nil
         }

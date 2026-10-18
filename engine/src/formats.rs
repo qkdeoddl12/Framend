@@ -1,6 +1,10 @@
 use crate::{Candidate, Format, source::Source};
 use std::io::{self, BufReader, Read};
 
+mod png;
+mod wav;
+pub(crate) use png::MAGIC as PNG_MAGIC;
+
 pub(crate) const MAX_PHOTO: u64 = 512 * 1024 * 1024;
 pub(crate) const RAF_MAGIC: &[u8] = b"FUJIFILMCCD-RAW ";
 
@@ -8,6 +12,8 @@ pub(crate) fn parse(source: &Source, offset: u64, format: Format) -> io::Result<
     match format {
         Format::Jpeg => jpeg(source, offset, MAX_PHOTO),
         Format::Raf => raf(source, offset),
+        Format::Png => png::parse(source, offset),
+        Format::Wav => wav::parse(source, offset),
     }
 }
 

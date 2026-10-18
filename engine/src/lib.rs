@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 pub mod exfat;
 mod export;
 mod formats;
+pub mod jobs;
 pub mod native_video;
+mod platform;
+mod process;
 mod scan;
 mod source;
 pub use export::recover;
@@ -24,6 +27,8 @@ pub struct SourceFingerprint {
 pub enum Format {
     Jpeg,
     Raf,
+    Png,
+    Wav,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

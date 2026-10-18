@@ -27,7 +27,7 @@ struct PreviewView: View {
                 if let width = candidate.width, let height = candidate.height {
                     LabeledContent("해상도", value: "\(width) × \(height)")
                 }
-                Text(candidate.format == .raf ? "RAF에 포함된 JPEG 미리보기입니다. RAW 원본의 정상 여부는 아직 검증하지 않았습니다." : "미리보기만으로 원본의 무결성을 판단할 수 없습니다. 저장 후 JPEG 디코딩 검사를 진행합니다.")
+                Text(candidate.previewLabel)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)

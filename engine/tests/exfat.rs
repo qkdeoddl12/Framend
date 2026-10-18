@@ -1,11 +1,16 @@
 use recovery_engine::exfat::{analyze, extract};
 use sha2::{Digest, Sha256};
-use std::{
-    fs, io,
-    os::unix::fs::{FileExt, symlink},
-    path::Path,
-};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::{fs, io, path::Path};
 use tempfile::TempDir;
+
+fn write_all_at(file: &fs::File, bytes: &[u8], offset: u64) -> io::Result<()> {
+    use io::{Seek, SeekFrom, Write};
+    let mut file = file;
+    file.seek(SeekFrom::Start(offset))?;
+    file.write_all(bytes)
+}
 
 fn tempdir() -> TempDir {
     // macOS /var is a symlink; safe output tests use the physical temp path.
@@ -427,9 +432,12 @@ fn symlink_input_existing_output_and_symlink_parent_are_refused() {
     let temp = tempdir();
     let (image, _) = with_video(true, false);
     let path = save(temp.path(), &image);
-    let input_link = temp.path().join("input-link");
-    symlink(&path, &input_link).unwrap();
-    assert!(analyze(&input_link).is_err());
+    #[cfg(unix)]
+    {
+        let input_link = temp.path().join("input-link");
+        symlink(&path, &input_link).unwrap();
+        assert!(analyze(&input_link).is_err());
+    }
     let scan = analyze(&path).unwrap();
     let existing = temp.path().join("existing.mov");
     fs::write(&existing, b"keep").unwrap();
@@ -444,30 +452,33 @@ fn symlink_input_existing_output_and_symlink_parent_are_refused() {
         .is_err()
     );
     assert_eq!(fs::read(&existing).unwrap(), b"keep");
-    let output_link = temp.path().join("output-link");
-    symlink(&existing, &output_link).unwrap();
-    assert!(
-        extract(
-            &path,
-            &output_link,
-            &scan.source,
-            &scan.candidates[0],
-            |_, _| Ok(())
-        )
-        .is_err()
-    );
-    let parent_link = temp.path().join("parent-link");
-    symlink(temp.path(), &parent_link).unwrap();
-    assert!(
-        extract(
-            &path,
-            &parent_link.join("escaped.mov"),
-            &scan.source,
-            &scan.candidates[0],
-            |_, _| Ok(())
-        )
-        .is_err()
-    );
+    #[cfg(unix)]
+    {
+        let output_link = temp.path().join("output-link");
+        symlink(&existing, &output_link).unwrap();
+        assert!(
+            extract(
+                &path,
+                &output_link,
+                &scan.source,
+                &scan.candidates[0],
+                |_, _| Ok(())
+            )
+            .is_err()
+        );
+        let parent_link = temp.path().join("parent-link");
+        symlink(temp.path(), &parent_link).unwrap();
+        assert!(
+            extract(
+                &path,
+                &parent_link.join("escaped.mov"),
+                &scan.source,
+                &scan.candidates[0],
+                |_, _| Ok(())
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -672,7 +683,7 @@ fn source_modified_during_extraction_is_detected() {
         &scan.candidates[0],
         |done, _| {
             if done > 0 {
-                source_writer.write_all_at(&[0x42], image.len() as u64 - 1)?;
+                write_all_at(&source_writer, &[0x42], image.len() as u64 - 1)?;
             }
             Ok(())
         },
@@ -707,15 +718,13 @@ fn video_larger_than_512_mib_is_scanned_and_streamed_without_loading_payload() {
     metadata[cluster(3)..cluster(3) + SECTOR].fill(0);
     file.set_len(HEAP as u64 + u64::from(count) * big_cluster)
         .unwrap();
-    file.write_all_at(&metadata[..HEAP + SECTOR], 0).unwrap();
+    write_all_at(&file, &metadata[..HEAP + SECTOR], 0).unwrap();
     let mut bitmap = vec![0u8; u64::from(count).div_ceil(8) as usize];
     for index in [2, 3].into_iter().chain(8..8 + 513) {
         bitmap[(index - 2) / 8] |= 1 << ((index - 2) % 8);
     }
-    file.write_all_at(&bitmap, HEAP as u64 + big_cluster)
-        .unwrap();
-    file.write_all_at(&media(64), HEAP as u64 + 6 * big_cluster)
-        .unwrap();
+    write_all_at(&file, &bitmap, HEAP as u64 + big_cluster).unwrap();
+    write_all_at(&file, &media(64), HEAP as u64 + 6 * big_cluster).unwrap();
     drop(file);
     let scan = analyze(&path).unwrap();
     assert_eq!(scan.candidates[0].length, length);
@@ -743,4 +752,111 @@ fn video_larger_than_512_mib_is_scanned_and_streamed_without_loading_payload() {
     );
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
     assert_eq!(fs::metadata(output).unwrap().len(), 1024 * 1024);
+}
+
+#[test]
+fn general_files_extract_arbitrary_active_and_deleted_content_with_exact_hash() {
+    use recovery_engine::exfat::{analyze_files, extract_file};
+    for deleted in [false, true] {
+        let temp = tempdir();
+        let (mut image, _) = with_video(false, deleted);
+        let bytes: Vec<u8> = (0..1200).map(|i| (i % 253) as u8).collect();
+        for (index, data) in bytes.chunks(SECTOR).enumerate() {
+            let at = cluster([8, 15, 6][index]);
+            image[at..at + data.len()].copy_from_slice(data);
+        }
+        write_entry(
+            &mut image,
+            cluster(2) + 32,
+            &entry("notes.zip", 8, 1200, false, deleted),
+        );
+        let path = save(temp.path(), &image);
+        assert!(analyze(&path).unwrap().candidates.is_empty());
+        let scan = analyze_files(&path).unwrap();
+        assert_eq!(scan.candidates.len(), 1);
+        let candidate = &scan.candidates[0];
+        assert!(candidate.recoverable, "{:?}", candidate.reason);
+        let output = temp.path().join("out.bin");
+        assert!(extract(&path, &output, &scan.source, candidate, |_, _| Ok(())).is_err());
+        let hash = extract_file(&path, &output, &scan.source, candidate, |_, _| Ok(())).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+        assert!(extract_file(&path, &output, &scan.source, candidate, |_, _| Ok(())).is_err());
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+    }
+}
+#[test]
+fn general_files_do_not_trust_video_extensions_or_overlapping_ownership() {
+    use recovery_engine::exfat::analyze_files;
+    let temp = tempdir();
+    let (mut image, _) = with_video(true, false);
+    image[cluster(8)..cluster(8) + 32].fill(42);
+    let path = save(temp.path(), &image);
+    assert!(!analyze(&path).unwrap().candidates[0].recoverable);
+    assert!(analyze_files(&path).unwrap().candidates[0].recoverable);
+    write_entry(
+        &mut image,
+        cluster(2) + 128,
+        &entry("duplicate.bin", 8, 1200, true, false),
+    );
+    fs::write(&path, image).unwrap();
+    let scan = analyze_files(&path).unwrap();
+    assert_eq!(scan.candidates.len(), 2);
+    assert!(
+        scan.candidates
+            .iter()
+            .all(|c| !c.recoverable && c.reason.as_deref().unwrap().contains("overlaps"))
+    );
+}
+#[test]
+fn general_file_extract_revalidates_source_and_rejects_forged_extents() {
+    use recovery_engine::exfat::{analyze_files, extract_file};
+    let temp = tempdir();
+    let (image, _) = with_video(true, false);
+    let path = save(temp.path(), &image);
+    let scan = analyze_files(&path).unwrap();
+    let mut forged = scan.candidates[0].clone();
+    forged.extents[0].offset += 1;
+    let output = temp.path().join("out.bin");
+    assert!(extract_file(&path, &output, &scan.source, &forged, |_, _| Ok(())).is_err());
+    assert!(!output.exists());
+    let mut changed = image;
+    changed[cluster(8) + 100] ^= 1;
+    fs::write(&path, changed).unwrap();
+    assert!(
+        extract_file(
+            &path,
+            &output,
+            &scan.source,
+            &scan.candidates[0],
+            |_, _| Ok(())
+        )
+        .is_err()
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn general_empty_regular_file_is_extractable_without_claiming_clusters() {
+    use recovery_engine::exfat::{analyze_files, extract_file};
+    let temp = tempdir();
+    let mut image = volume();
+    write_entry(
+        &mut image,
+        cluster(2) + 32,
+        &entry("empty.txt", 0, 0, false, false),
+    );
+    let path = save(temp.path(), &image);
+    let scan = analyze_files(&path).unwrap();
+    assert_eq!(scan.candidates.len(), 1);
+    let candidate = &scan.candidates[0];
+    assert!(candidate.recoverable);
+    assert!(candidate.extents.is_empty());
+    let out = temp.path().join("empty.txt");
+    let hash = extract_file(&path, &out, &scan.source, candidate, |_, _| Ok(())).unwrap();
+    assert_eq!(
+        hash,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(fs::metadata(out).unwrap().len(), 0);
 }

@@ -1,0 +1,20 @@
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, copyFileSync, chmodSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const cargo = process.env.CARGO || 'cargo';
+const rustc = process.env.RUSTC || 'rustc';
+const host = spawnSync(rustc, ['--print', 'host-tuple'], { encoding: 'utf8' });
+if (host.status !== 0) throw new Error(host.stderr || 'rustc unavailable');
+const target = process.env.TAURI_ENV_TARGET_TRIPLE || host.stdout.trim();
+if (!/^[a-zA-Z0-9_-]+$/.test(target)) throw new Error('Invalid target triple');
+const build = spawnSync(cargo, ['build', '--locked', '--manifest-path', resolve(desktop, '../engine/Cargo.toml'), '--target-dir', resolve(desktop, '../engine/target'), '--release', '--target', target], { stdio: 'inherit' });
+if (build.status !== 0) process.exit(build.status || 1);
+const extension = target.includes('windows') ? '.exe' : '';
+const destination = resolve(desktop, 'src-tauri/binaries', `recovery-engine-${target}${extension}`);
+mkdirSync(dirname(destination), { recursive: true });
+copyFileSync(resolve(desktop, '../engine/target', target, 'release', `recovery-engine${extension}`), destination);
+if (process.platform !== 'win32') chmodSync(destination, 0o755);
+console.log(`Staged ${target} recovery engine`);

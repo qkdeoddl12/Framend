@@ -1,6 +1,8 @@
 use recovery_engine::native_video::salvage;
 use sha2::{Digest, Sha256};
-use std::{fs, io, os::unix::fs::symlink};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+use std::{fs, io};
 use tempfile::TempDir;
 
 fn tempdir() -> TempDir {
@@ -30,7 +32,7 @@ impl Bits {
     }
     fn end(mut self) -> Vec<u8> {
         self.0.push(true);
-        while self.0.len() % 8 != 0 {
+        while !self.0.len().is_multiple_of(8) {
             self.0.push(false);
         }
         self.0
@@ -385,9 +387,12 @@ fn native_video_rejects_symlinks_and_honors_cancellation() {
     )
     .unwrap();
     fs::write(&refer, reference(false)).unwrap();
-    let link = dir.path().join("link");
-    symlink(&input, &link).unwrap();
-    assert!(salvage(&link, &refer, &dir.path().join("out"), |_, _| Ok(())).is_err());
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link");
+        symlink(&input, &link).unwrap();
+        assert!(salvage(&link, &refer, &dir.path().join("out"), |_, _| Ok(())).is_err());
+    }
     let result = salvage(&input, &refer, &dir.path().join("cancelled"), |_, _| {
         Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
     });
@@ -604,6 +609,7 @@ fn native_video_preserves_hevc_emulation_prevention_crossing_header_window() {
 }
 
 #[test]
+#[cfg(unix)]
 fn native_video_rejects_output_parent_symlinks() {
     let dir = tempdir();
     let outside = tempdir();
@@ -636,6 +642,33 @@ fn native_video_detects_source_change_during_final_progress() {
         Ok(())
     });
     assert!(result.is_err());
+}
+
+#[test]
+fn native_video_detects_output_replacement_during_final_progress() {
+    let dir = tempdir();
+    let input = dir.path().join("in");
+    let refer = dir.path().join("ref");
+    let output = dir.path().join("out");
+    fs::write(
+        &input,
+        pack(&[slice(true, 0, 0), slice(false, 1, 0), slice(false, 2, 0)]),
+    )
+    .unwrap();
+    fs::write(&refer, reference(false)).unwrap();
+    let mut replaced = false;
+    let result = salvage(&input, &refer, &output, |done, total| {
+        if done == total {
+            fs::rename(&output, dir.path().join("retained-evidence"))?;
+            fs::write(&output, b"replacement")?;
+            replaced = true;
+        }
+        Ok(())
+    });
+    assert!(replaced);
+    assert!(result.is_err());
+    assert_eq!(fs::read(&output).unwrap(), b"replacement");
+    assert!(dir.path().join("retained-evidence").exists());
 }
 
 #[test]

@@ -11,7 +11,7 @@ public struct SourceFingerprint: Codable, Equatable, Sendable {
 }
 
 public struct Candidate: Codable, Equatable, Identifiable, Sendable {
-    public enum Format: String, Codable, Sendable { case jpeg, raf }
+    public enum Format: String, Codable, Sendable { case jpeg, raf, png, wav }
     public let offset: UInt64
     public let length: UInt64
     public let format: Format
@@ -19,8 +19,26 @@ public struct Candidate: Codable, Equatable, Identifiable, Sendable {
     public let height: UInt32?
     public let camera: String?
     public var id: UInt64 { offset }
-    public var filename: String { "\(String(offset, radix: 16)).\(format == .jpeg ? "jpg" : "raf")" }
-    public var statusLabel: String { format == .raf ? "구조 확인 · RAW 미검증" : "구조 확인 · 픽셀 미검증" }
+    public var filename: String {
+        let suffix = format == .jpeg ? "jpg" : format.rawValue
+        return "\(String(offset, radix: 16)).\(suffix)"
+    }
+    public var statusLabel: String {
+        switch format {
+        case .raf: "구조 확인 · RAW 미검증"
+        case .wav: "RIFF 구조 확인 · 오디오 디코딩 미검증"
+        case .png: "구조·CRC 확인 · 픽셀 미검증"
+        case .jpeg: "구조 확인 · 픽셀 미검증"
+        }
+    }
+    public var previewLabel: String {
+        switch format {
+        case .raf: "RAF에 포함된 JPEG 미리보기입니다. RAW 원본의 정상 여부는 아직 검증하지 않았습니다."
+        case .wav: "RIFF/WAVE 길이와 청크 구조를 확인했습니다. 오디오 디코딩과 재생은 검증하지 않았습니다."
+        case .png: "PNG 청크 구조와 CRC를 확인했습니다. 저장 후 이미지 디코딩 검사를 진행합니다."
+        case .jpeg: "미리보기만으로 원본의 무결성을 판단할 수 없습니다. 저장 후 JPEG 디코딩 검사를 진행합니다."
+        }
+    }
 }
 
 public struct RecoveryRequest: Encodable, Sendable {

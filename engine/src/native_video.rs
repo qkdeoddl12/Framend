@@ -1,17 +1,12 @@
 //! Conservative, reference-assisted recovery of length-prefixed AVC/HEVC NALs.
 //! This is a structural video-only salvage, never a claim of complete recovery.
+use crate::platform::GuardedOutput;
 use crate::source::{Source, invalid};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::CString,
-    fs::File,
     io::{self, Read, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::ffi::OsStrExt,
-    },
-    path::{Component, Path},
+    path::Path,
 };
 
 const WINDOW: usize = 1024 * 1024;
@@ -41,7 +36,7 @@ pub struct SalvageSegment {
 }
 
 struct SegmentWriter {
-    file: File,
+    file: GuardedOutput,
     offset: u64,
     current: Option<(SalvageSegment, Sha256)>,
     completed: Vec<SalvageSegment>,
@@ -277,6 +272,7 @@ pub fn salvage(
     progress(total, total)?;
     input.unchanged()?;
     reference.unchanged()?;
+    writer.file.sync_all()?;
     let mut warnings = vec![
         "PARTIAL video-only salvage: audio and original timing are not restored.".into(),
         "Frame rate is estimated from reference stts/mdhd; original timestamps and duration are unknown.".into(),
@@ -342,60 +338,8 @@ fn hash(
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn create_output(path: &Path) -> io::Result<File> {
-    let path = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let name = path
-        .file_name()
-        .ok_or_else(|| invalid("Output filename missing."))?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("Output parent missing."))?;
-    let mut directory = File::open("/")?;
-    // Pin each ancestor, so neither a symlink nor a path-replacement race can
-    // redirect the exclusive creation outside the selected physical directory.
-    for component in parent.components() {
-        match component {
-            Component::RootDir | Component::CurDir => continue,
-            Component::Normal(name) => {
-                let name =
-                    CString::new(name.as_bytes()).map_err(|_| invalid("NUL in output path."))?;
-                // SAFETY: the directory fd and NUL-terminated name are live;
-                // every successful descriptor is immediately owned by File.
-                let fd = unsafe {
-                    libc::openat(
-                        directory.as_raw_fd(),
-                        name.as_ptr(),
-                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                    )
-                };
-                if fd < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // SAFETY: fd is a new, exclusively owned descriptor.
-                directory = unsafe { File::from_raw_fd(fd) };
-            }
-            _ => return Err(invalid("Parent traversal in output path is not allowed.")),
-        }
-    }
-    let name = CString::new(name.as_bytes()).map_err(|_| invalid("NUL in output filename."))?;
-    // SAFETY: live parent fd and name; O_EXCL protects every existing path.
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: successful openat returns a new, exclusively owned descriptor.
-    Ok(unsafe { File::from_raw_fd(fd) })
+fn create_output(path: &Path) -> io::Result<GuardedOutput> {
+    GuardedOutput::create(path, 0)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

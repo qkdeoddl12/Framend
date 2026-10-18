@@ -47,7 +47,7 @@ struct ContentView: View {
             }
             VStack(alignment: .leading, spacing: 22) {
                 step("1", title: "이미지 선택", detail: "카드 복제본을 불러옵니다", active: model.imageURL != nil)
-                step("2", title: "파일 찾기", detail: "JPEG · Fujifilm RAF", active: !model.candidates.isEmpty)
+                step("2", title: "파일 찾기", detail: "JPEG · RAF · PNG · WAVE", active: !model.candidates.isEmpty)
                 step("3", title: "복구 저장", detail: "별도 폴더에 안전하게", active: model.outputURL != nil)
             }
             Spacer()
@@ -97,7 +97,7 @@ struct ContentView: View {
                 .font(.system(size: 48, weight: .light)).foregroundStyle(.secondary).accessibilityHidden(true)
             Text(model.isBusy ? "사진의 흔적을 찾고 있습니다" : model.phase == .scanned ? "복구 후보가 없습니다" : "사진을 찾는 첫 단계")
                 .font(.title2.bold())
-            Text(model.isBusy ? "원본 이미지에는 어떤 내용도 쓰지 않습니다." : "SD카드의 디스크 이미지 파일을 열어주세요.\nJPEG와 RAF의 파일 구조를 찾아 복구 후보를 보여드립니다.")
+            Text(model.isBusy ? "원본 이미지에는 어떤 내용도 쓰지 않습니다." : "SD카드의 디스크 이미지 파일을 열어주세요.\nJPEG·RAF·PNG·WAVE의 파일 구조를 찾아 복구 후보를 보여드립니다.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
             if !model.isBusy {
                 Button(model.imageURL == nil ? "이미지 파일 선택" : "파일 찾기 시작") {
@@ -118,7 +118,7 @@ struct ContentView: View {
                 Text("발견한 파일 \(model.candidates.count)").font(.headline)
                 Spacer()
                 Picker("파일 종류", selection: $model.filter) {
-                    Text("전체").tag("전체"); Text("JPEG").tag("JPEG"); Text("RAF").tag("RAF")
+                    Text("전체").tag("전체"); Text("JPEG").tag("JPEG"); Text("RAF").tag("RAF"); Text("PNG").tag("PNG"); Text("WAVE").tag("WAV")
                 }.pickerStyle(.segmented).frame(width: 190)
                 Button("모두 선택") { model.selection = Set(model.visibleCandidates.map(\.id)) }
                 Button("선택 해제") { model.selection = [] }
@@ -126,7 +126,7 @@ struct ContentView: View {
             HSplitView {
                 Table(model.visibleCandidates, selection: $model.selection) {
                     TableColumn("파일") { candidate in
-                        Label(candidate.filename, systemImage: candidate.format == .raf ? "camera.aperture" : "photo")
+                        Label(candidate.filename, systemImage: candidate.format == .raf ? "camera.aperture" : candidate.format == .wav ? "waveform" : "photo")
                             .font(.callout.monospacedDigit())
                     }.width(min: 130, ideal: 170)
                     TableColumn("크기") { candidate in Text(Self.bytes(candidate.length)).foregroundStyle(.secondary) }

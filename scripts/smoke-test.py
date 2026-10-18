@@ -23,6 +23,7 @@ candidates = [event["candidate"] for event in events if event["event"] == "candi
 assert [c["format"] for c in candidates] == ["jpeg", "raf"]
 request = {"source": events[0]["source"], "candidates": candidates}
 with tempfile.TemporaryDirectory(prefix="recovery-smoke-") as output:
+    output = pathlib.Path(output).resolve()
     result = [json.loads(line) for line in run("recover", image, output, payload=json.dumps(request)).stdout.splitlines()]
     saved = [e for e in result if e["event"] == "saved"]
     assert len(saved) == 2

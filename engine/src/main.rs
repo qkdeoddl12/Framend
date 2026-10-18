@@ -1,5 +1,5 @@
 use recovery_engine::{
-    Event, RecoveryRequest, SourceFingerprint, exfat, native_video, recover, scan,
+    Event, RecoveryRequest, SourceFingerprint, exfat, jobs, native_video, recover, scan,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,6 +38,9 @@ fn run() -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
     match args.first().and_then(|a| a.to_str()) {
+        Some("desktop-job") if args.len() == 1 => {
+            jobs::run(request()?, |event| emit(&mut output, &event))
+        }
         Some("scan") if args.len() == 2 => scan(Path::new(&args[1]), |event: Event| {
             emit(&mut output, &event)
         }),
@@ -50,12 +53,22 @@ fn run() -> io::Result<()> {
                 |event| emit(&mut output, &event),
             )
         }
-        Some("video-scan") if args.len() == 2 => {
-            emit(&mut output, &exfat::analyze(Path::new(&args[1]))?)
+        Some(command @ ("video-scan" | "file-scan")) if args.len() == 2 => {
+            let scan = if command == "file-scan" {
+                exfat::analyze_files(Path::new(&args[1]))?
+            } else {
+                exfat::analyze(Path::new(&args[1]))?
+            };
+            emit(&mut output, &scan)
         }
-        Some("video-extract") if args.len() == 3 => {
+        Some(command @ ("video-extract" | "file-extract")) if args.len() == 3 => {
             let request: ExtractRequest = request()?;
-            let sha256 = exfat::extract(
+            let extract = if command == "file-extract" {
+                exfat::extract_file
+            } else {
+                exfat::extract
+            };
+            let sha256 = extract(
                 Path::new(&args[1]),
                 Path::new(&args[2]),
                 &request.source,
@@ -90,7 +103,7 @@ fn run() -> io::Result<()> {
             )
         }
         _ => Err(io::Error::other(
-            "Usage: recovery-engine scan IMAGE | recover IMAGE OUTPUT_DIR < request.json | video-scan IMAGE | video-extract IMAGE OUTPUT_FILE < request.json | video-salvage INPUT REFERENCE OUTPUT_ES",
+            "Usage: recovery-engine scan IMAGE | recover IMAGE OUTPUT_DIR < request.json | file-scan IMAGE | file-extract IMAGE OUTPUT_FILE < request.json | video-scan IMAGE | video-extract IMAGE OUTPUT_FILE < request.json | video-salvage INPUT REFERENCE OUTPUT_ES | desktop-job < request.json",
         )),
     }
 }

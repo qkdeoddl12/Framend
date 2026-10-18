@@ -1,6 +1,8 @@
 use recovery_engine::{Candidate, Event, Format, RecoveryRequest, recover, scan};
 use std::{fs, io, path::Path};
-use tempfile::tempdir;
+fn tempdir() -> io::Result<tempfile::TempDir> {
+    tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
+}
 
 // Structural fixture. Actual JPEG pixel decoding is exercised by the end-to-end fixture.
 fn jpeg() -> Vec<u8> {
@@ -254,6 +256,7 @@ fn interrupted_export_keeps_incomplete_marker() {
 }
 
 #[test]
+#[cfg(unix)]
 fn symbolic_source_link_is_rejected() {
     let temp = tempdir().unwrap();
     let target = temp.path().join("card.img");
@@ -261,4 +264,40 @@ fn symbolic_source_link_is_rejected() {
     let alias = temp.path().join("alias.img");
     std::os::unix::fs::symlink(&target, &alias).unwrap();
     assert!(events(&alias).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_rejects_linked_output_parent() {
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("card.img");
+    fs::write(&target, jpeg()).unwrap();
+    let found = events(&target).unwrap();
+    let request = request(&found);
+    let output = temp.path().join("output-link");
+    std::os::unix::fs::symlink(temp.path(), &output).unwrap();
+    assert!(recover(&target, &output, &request, |_| Ok(())).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_stops_without_writing_into_replaced_session() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let target = temp.path().join("card.img");
+    fs::write(&target, jpeg()).unwrap();
+    let found = events(&target).unwrap();
+    let request = request(&found);
+    let mut replaced = None;
+    let result = recover(&target, temp.path(), &request, |event| {
+        if let Event::Saved { path, .. } = event {
+            let directory = Path::new(&path).parent().unwrap().to_owned();
+            fs::rename(&directory, temp.path().join("moved-session"))?;
+            fs::create_dir(&directory)?;
+            replaced = Some(directory);
+        }
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read_dir(replaced.unwrap()).unwrap().count(), 0);
+    assert!(temp.path().join("moved-session/INCOMPLETE.txt").exists());
 }

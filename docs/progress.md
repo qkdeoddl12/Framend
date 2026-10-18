@@ -1,5 +1,27 @@
 # Recovery Card implementation ledger
 
+## 2026-10-18 — General files and shared desktop
+
+- User approved A/B implementation: portable guarded Rust I/O, general exFAT
+  files, PNG/WAVE carving and a Tauri desktop shared by macOS and Windows.
+- Shared worker owns selected-file recovery, per-segment video repair, media
+  decoding, provenance, hashes, incomplete markers and bounded tool processes.
+  Original Swift application and CLI APIs remain regression targets.
+- Independent review findings were reproduced and fixed: evidence changes,
+  audio-only M4A validation, bounded child termination, Windows close-time file
+  metadata and final completion callback checks. Real external exFAT testing
+  found AppleDouble sidecars in evidence enumeration; explicit registration fixes
+  this without relaxing actual result/report checks.
+- Final engine 115 tests, host/Windows target Clippy, desktop state/bridge tests,
+  Swift checks, six-file byte-exact recovery and six generated H.264/HEVC worker
+  cases pass. Eight successful video outputs contain 240 exact-pixel frames.
+- The macOS native picker/scan/preview/recover flow works with the external SSD.
+  Native Windows execution remains pending; CI includes native engine tests,
+  portable hash checks, app builds and NSIS packaging. Nothing is published.
+- See [cross-platform validation](cross-platform-validation.md) for commands,
+  measured scope and remaining acceptance. FAT32/GPT/NTFS/APFS, additional RAW
+  carving, arbitrary fragment reconstruction and AI inference are subsequent work.
+
 ## 2026-10-17 independent video segments (continuation)
 
 - User authorized continued implementation. Ruling: address unsafe cross-gap
