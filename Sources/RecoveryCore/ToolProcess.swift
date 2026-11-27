@@ -182,8 +182,7 @@ public enum ToolProcess {
         for fd in pipes { try check(posix_spawn_file_actions_addclose(&actions, fd), "close child pipe") }
         if let directory {
             let code = directory.path.withCString { path in
-                if #available(macOS 26, *) { return posix_spawn_file_actions_addchdir(&actions, path) }
-                return posix_spawn_file_actions_addchdir_np(&actions, path)
+                posix_spawn_file_actions_addchdir_np(&actions, path)
             }
             try check(code, "set working directory")
         }

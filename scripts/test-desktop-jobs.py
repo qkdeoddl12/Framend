@@ -93,7 +93,7 @@ def main():
     args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix='desktop-jobs-', dir=args.output_root.resolve()))
     def run(request):
-        result = subprocess.run([str(args.engine.resolve()), 'desktop-job'], input=json.dumps(request), text=True, capture_output=True, timeout=120)
+        result = subprocess.run([str(args.engine.resolve()), 'desktop-job'], input=json.dumps(request), encoding="utf-8", capture_output=True, timeout=120)
         assert result.returncode == 0, result.stderr
         events = [json.loads(line) for line in result.stdout.splitlines()]
         assert events[0]['event'] == 'started' and events[-1]['event'] == 'complete'
