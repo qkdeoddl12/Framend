@@ -164,7 +164,8 @@ mod tests {
         let path = dir.path().join("source.img");
         std::fs::write(&path, b"abc").unwrap();
         let source = Source::open(&path).unwrap();
-        std::fs::rename(&path, dir.path().join("old.img")).unwrap();
+        let retained = tempfile::tempdir_in(dir.path()).unwrap();
+        std::fs::rename(&path, retained.path().join("old.img")).unwrap();
         std::fs::write(&path, b"xyz").unwrap();
         assert!(source.unchanged().is_err());
     }

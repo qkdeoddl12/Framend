@@ -431,7 +431,8 @@ mod tests {
         let dir = tempdir();
         let guard = GuardedDirectory::open(dir.path()).unwrap();
         let file = guard.create_new(OsStr::new("output"), 0).unwrap();
-        fs::rename(dir.path().join("output"), dir.path().join("moved")).unwrap();
+        let retained = tempfile::tempdir_in(dir.path()).unwrap();
+        fs::rename(dir.path().join("output"), retained.path().join("moved")).unwrap();
         fs::write(dir.path().join("output"), b"replacement").unwrap();
         assert!(guard.verify_file(OsStr::new("output"), &file).is_err());
     }

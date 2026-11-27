@@ -647,6 +647,7 @@ fn native_video_detects_source_change_during_final_progress() {
 #[test]
 fn native_video_detects_output_replacement_during_final_progress() {
     let dir = tempdir();
+    let retained = tempfile::tempdir_in(dir.path()).unwrap();
     let input = dir.path().join("in");
     let refer = dir.path().join("ref");
     let output = dir.path().join("out");
@@ -659,7 +660,7 @@ fn native_video_detects_output_replacement_during_final_progress() {
     let mut replaced = false;
     let result = salvage(&input, &refer, &output, |done, total| {
         if done == total {
-            fs::rename(&output, dir.path().join("retained-evidence"))?;
+            fs::rename(&output, retained.path().join("retained-evidence"))?;
             fs::write(&output, b"replacement")?;
             replaced = true;
         }
@@ -668,7 +669,7 @@ fn native_video_detects_output_replacement_during_final_progress() {
     assert!(replaced);
     assert!(result.is_err());
     assert_eq!(fs::read(&output).unwrap(), b"replacement");
-    assert!(dir.path().join("retained-evidence").exists());
+    assert!(retained.path().join("retained-evidence").exists());
 }
 
 #[test]

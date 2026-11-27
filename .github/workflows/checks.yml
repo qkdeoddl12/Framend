@@ -29,8 +29,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          # Tauri 2.11 expects the pre-1.100 Cargo build directory layout.
+          toolchain: 1.99.1
           components: rustfmt, clippy
 
       - name: Check formatting

@@ -142,15 +142,16 @@ mod tests {
         );
         assert_eq!(fs::read(folder.path().join(target)).unwrap(), b"existing");
         assert_eq!(fs::read(folder.path().join(partial)).unwrap(), b"recovered");
+        let retained = tempfile::tempdir_in(folder.path()).unwrap();
         fs::rename(
             folder.path().join(target),
-            folder.path().join("existing.jpg"),
+            retained.path().join("existing.jpg"),
         )
         .unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(
-                folder.path().join("existing.jpg"),
+                retained.path().join("existing.jpg"),
                 folder.path().join(target),
             )
             .unwrap();
@@ -159,7 +160,7 @@ mod tests {
                 io::ErrorKind::AlreadyExists
             );
             assert_eq!(
-                fs::read(folder.path().join("existing.jpg")).unwrap(),
+                fs::read(retained.path().join("existing.jpg")).unwrap(),
                 b"existing"
             );
             fs::remove_file(folder.path().join(target)).unwrap();

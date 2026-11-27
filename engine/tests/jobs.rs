@@ -184,6 +184,7 @@ fn tampered_evidence_never_finishes_as_success() {
 #[test]
 fn source_replacement_during_copy_keeps_incomplete_evidence() {
     let temp = tempdir().unwrap();
+    let retained = tempfile::tempdir_in(temp.path()).unwrap();
     let source = temp.path().join("source.img");
     fs::write(&source, wave()).unwrap();
     let request = serde_json::from_value(json!({"operation":"recover","source":source,"output":temp.path(),"selections":[selection(&source)]})).unwrap();
@@ -191,7 +192,7 @@ fn source_replacement_during_copy_keeps_incomplete_evidence() {
     let mut completed = false;
     let result = run(request, |event| {
         if !replaced && event["event"] == "progress" && event["phase"] == "copy" {
-            fs::rename(&source, temp.path().join("original-source.img"))?;
+            fs::rename(&source, retained.path().join("original-source.img"))?;
             fs::write(&source, wave())?;
             replaced = true;
         }
@@ -207,6 +208,7 @@ fn source_replacement_during_copy_keeps_incomplete_evidence() {
 #[test]
 fn output_replacement_during_copy_is_detected_without_touching_replacement() {
     let temp = tempdir().unwrap();
+    let retained = tempfile::tempdir_in(temp.path()).unwrap();
     let source = temp.path().join("source.img");
     fs::write(&source, wave()).unwrap();
     let request = serde_json::from_value(json!({"operation":"recover","source":source,"output":temp.path(),"selections":[selection(&source)]})).unwrap();
@@ -216,7 +218,7 @@ fn output_replacement_during_copy_is_detected_without_touching_replacement() {
         if replaced.is_none() && event["event"] == "progress" && event["phase"] == "copy" {
             let directory = session(temp.path());
             let path = directory.join("file_000001.wav");
-            fs::rename(&path, directory.join("retained.wav"))?;
+            fs::rename(&path, retained.path().join("retained.wav"))?;
             fs::write(&path, b"replacement")?;
             replaced = Some(path);
         }
