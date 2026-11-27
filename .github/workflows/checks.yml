@@ -15,7 +15,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macos-15, windows-2025]
+        os: [macos-15, macos-15-intel, windows-2025]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -72,14 +72,62 @@ jobs:
         run: bash scripts/build-app.sh
 
       - name: Package common macOS app
-        if: matrix.os == 'macos-15'
+        if: runner.os == 'macOS'
         working-directory: desktop
-        run: npm run desktop:build -- --bundles app
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run desktop:build -- --bundles app,dmg --ci
+
+      - name: Verify macOS download
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=(desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          mount="$RUNNER_TEMP/framend-mount"
+          mkdir -p "$mount"
+          hdiutil verify "${dmg[0]}"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${dmg[0]}"
+          trap 'hdiutil detach "$mount"' EXIT
+          codesign --verify --deep --strict "$mount/Framend.app"
+          python3 scripts/test-desktop-jobs.py --engine "$mount/Framend.app/Contents/MacOS/recovery-engine" --output-root "$RUNNER_TEMP"
 
       - name: Package Windows installer
         if: matrix.os == 'windows-2025'
         working-directory: desktop
         run: npm run desktop:build -- --bundles nsis
+
+      - name: Install and launch Windows download
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-Item desktop/src-tauri/target/release/bundle/nsis/*.exe
+          $installDir = Join-Path $env:RUNNER_TEMP 'Framend'
+          $setup = Start-Process $installer.FullName -ArgumentList "/S /D=$installDir" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
+          $gui = Start-Process "$installDir/framend-desktop.exe" -PassThru
+          try {
+            $deadline = [datetime]::UtcNow.AddSeconds(60)
+            do {
+              Start-Sleep -Milliseconds 300
+              $gui.Refresh()
+              if ($gui.HasExited) { throw "App exited during launch" }
+            } until ($gui.MainWindowTitle -eq 'Framend' -or [datetime]::UtcNow -ge $deadline)
+            if ($gui.MainWindowTitle -ne 'Framend') { throw "Framend window did not open" }
+            python scripts/test-desktop-jobs.py --engine "$installDir/recovery-engine.exe" --output-root "$env:RUNNER_TEMP"
+            if ($LASTEXITCODE -ne 0) { throw "Installed engine recovery failed" }
+          } finally {
+            if (!$gui.HasExited) { $gui.Kill() }
+          }
+
+      - name: Keep verified installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: framend-${{ matrix.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
       - name: Run RecoveryChecks
         if: matrix.os == 'macos-15'

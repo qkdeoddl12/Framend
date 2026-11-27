@@ -7,6 +7,7 @@ import { messages } from './i18n.ts';
 import type { Language, MessageKey } from './i18n.ts';
 import './style.css';
 
+const brandIcon = new URL('../src-tauri/icons/128x128.png', import.meta.url).href;
 const state = new JobState();
 let language: Language = localStorage.getItem('framend-language') === 'en' ? 'en' : 'ko';
 let mode: 'recovery' | 'repair' = 'recovery';
@@ -48,7 +49,7 @@ function pickRow(id: string, title: string, help: string, value: string, folder 
 function shell() {
   document.documentElement.lang = language;
   $('app').innerHTML = `
-    <header><div class="brand"><span class="mark" aria-hidden="true">F</span><div><strong>Framend</strong><span>${t('tagline')}</span></div></div>
+    <header><div class="brand"><img class="mark" src="${brandIcon}" alt="" width="42" height="42"><div><strong>Framend</strong><span>${t('tagline')}</span></div></div>
       <label class="language">${t('language')} <select id="language"><option value="ko" ${language === 'ko' ? 'selected' : ''}>한국어</option><option value="en" ${language === 'en' ? 'selected' : ''}>English</option></select></label></header>
     <main><div class="intro"><div><h1>${t(mode)}</h1><p>${t(mode === 'repair' ? 'repairIntro' : 'intro')}</p></div>
       <nav aria-label="Mode"><button id="recovery-mode" class="${mode === 'recovery' ? 'active' : ''}" ${busy() ? 'disabled' : ''}>${t('recovery')}</button><button id="repair-mode" class="${mode === 'repair' ? 'active' : ''}" ${busy() ? 'disabled' : ''}>${t('repair')}</button></nav></div>

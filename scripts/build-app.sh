@@ -10,6 +10,7 @@ fi
 swift build -c release --product RecoveryCard
 APP="dist/Framend.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
+cp desktop/src-tauri/icons/icon.icns "$APP/Contents/Resources/Framend.icns"
 cp .build/release/RecoveryCard "$APP/Contents/MacOS/RecoveryCard"
 cp engine/target/release/recovery-engine "$APP/Contents/Helpers/recovery-engine"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -19,6 +20,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Framend</string>
 <key>CFBundleDisplayName</key><string>Framend</string>
 <key>CFBundleIdentifier</key><string>local.recoverycard.app</string>
+<key>CFBundleIconFile</key><string>Framend.icns</string>
 <key>CFBundleExecutable</key><string>RecoveryCard</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.3.0</string>
