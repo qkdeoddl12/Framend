@@ -1,8 +1,20 @@
-# Common desktop and general file recovery — 2026-10-18
+# Desktop recovery validation
+
+## Public preview 0.1.0 · 2026-11-27
+
+| Release download | Checks completed |
+| --- | --- |
+| Windows x64 installer | A Windows Server 2025 x64 runner installed the NSIS package, launched the installed app and observed its Framend window. The installed worker recovered six generated files. |
+| Apple silicon and Intel Mac disk images | Native macOS 15 runners verified and mounted each DMG read-only, checked the bundled app signature and ran the same six-file recovery check with the worker inside the DMG. |
+
+All three release builds reproduced the expected SHA-256 hashes for two files found by signature and four files extracted from exFAT. The input images stayed unchanged. Windows 11 interactive file-picker and cancellation testing on a physical PC remains open.
+
+[GitHub Actions run](https://github.com/qkdeoddl12/Framend/actions/runs/45960395573) · [Release files and checksums](https://github.com/qkdeoddl12/Framend/releases/tag/v0.1.0)
+
+## Local validation · 2026-10-18
 
 The A/B implementation adds a portable Rust worker and a shared Tauri desktop.
-macOS execution is verified below. Windows engine target checks pass, but native
-Windows application execution and recovery remain pending. This is an experimental
+The October tests below covered macOS execution and Windows engine target checks. This is an experimental
 preview, not a measured comparison with commercial recovery products.
 
 ## Implemented scope
@@ -75,10 +87,7 @@ toolchains and installation artifacts.
 
 ## Outstanding acceptance
 
-Native Windows CI and an interactive Windows picker → scan → recover → cancel flow
-must still run. The workflow includes macOS app and Windows NSIS package builds,
-but no remote run exists before repository publication. macOS Intel packaging is
-also untested locally. Distribution signing/notarization is not configured.
+An interactive Windows 11 picker → scan → recover → cancel session on a physical PC remains to be checked. The first public preview uses ad hoc signing on macOS and an unsigned Windows installer.
 
 FAT32/GPT/NTFS/APFS, additional RAW/HEIF/PDF/ZIP signature parsers, arbitrary
 fragment reassembly and AI inference remain subsequent work. General exFAT

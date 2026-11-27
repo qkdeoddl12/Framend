@@ -4,7 +4,7 @@ Shared Tauri 2 application for macOS 14+ and Windows 11 x64. Inputs are ordinary
 
 ## Local development
 
-Install Rust 1.87+ and Node.js 24+. On macOS install Xcode Command Line Tools. On Windows install Microsoft C++ Build Tools with the Desktop development with C++ workload and WebView2. Use the native operating system for installers and runtime checks.
+Use Rust 1.99.1 and Node.js 24 to match the release toolchain. On macOS install Xcode Command Line Tools. On Windows install Microsoft C++ Build Tools with the Desktop development with C++ workload and WebView2. Use the native operating system for installers and runtime checks.
 
 From this directory:
 
