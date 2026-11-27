@@ -184,7 +184,7 @@ fn tampered_evidence_never_finishes_as_success() {
 #[test]
 fn source_replacement_during_copy_keeps_incomplete_evidence() {
     let temp = tempdir().unwrap();
-    let retained = tempfile::tempdir_in(temp.path()).unwrap();
+    let retained = tempdir().unwrap();
     let source = temp.path().join("source.img");
     fs::write(&source, wave()).unwrap();
     let request = serde_json::from_value(json!({"operation":"recover","source":source,"output":temp.path(),"selections":[selection(&source)]})).unwrap();
@@ -208,7 +208,7 @@ fn source_replacement_during_copy_keeps_incomplete_evidence() {
 #[test]
 fn output_replacement_during_copy_is_detected_without_touching_replacement() {
     let temp = tempdir().unwrap();
-    let retained = tempfile::tempdir_in(temp.path()).unwrap();
+    let retained = tempdir().unwrap();
     let source = temp.path().join("source.img");
     fs::write(&source, wave()).unwrap();
     let request = serde_json::from_value(json!({"operation":"recover","source":source,"output":temp.path(),"selections":[selection(&source)]})).unwrap();
